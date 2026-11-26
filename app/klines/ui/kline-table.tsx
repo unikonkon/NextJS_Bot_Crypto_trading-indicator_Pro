@@ -8,7 +8,7 @@ import { fmtDate, fmtNum, fmtPrice } from "../lib/format";
 
 const PAGE = 50;
 
-export function KlineTable({ bars, signals }: { bars: Bars; signals?: number[] }) {
+export function KlineTable({ bars, signals, reasons }: { bars: Bars; signals?: number[]; reasons?: (string | null)[] | null }) {
   const [page, setPage] = useState(0);
   const pages = Math.max(1, Math.ceil(bars.length / PAGE));
   const cur = Math.min(page, pages - 1);
@@ -23,7 +23,7 @@ export function KlineTable({ bars, signals }: { bars: Bars; signals?: number[] }
   return (
     <div className="border-t">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-[11px] tabular-nums">
+        <table className={cn("w-full text-[11px] tabular-nums", reasons ? "min-w-[860px]" : "min-w-[560px]")}>
           <thead className="border-b bg-muted/40 text-[10px] text-muted-foreground">
             <tr>
               <th className="px-2 py-1.5 text-left font-medium">เวลา</th>
@@ -34,6 +34,7 @@ export function KlineTable({ bars, signals }: { bars: Bars; signals?: number[] }
               <th className="px-2 py-1.5 text-right font-medium">%</th>
               <th className="px-2 py-1.5 text-right font-medium">Volume</th>
               {signals && <th className="px-2 py-1.5 text-center font-medium">สัญญาณ</th>}
+              {reasons && <th className="px-2 py-1.5 text-left font-medium">เหตุผลจากกลยุทธ์</th>}
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -55,6 +56,7 @@ export function KlineTable({ bars, signals }: { bars: Bars; signals?: number[] }
                       {s === -1 && <span className="text-red-500">▼</span>}
                     </td>
                   )}
+                  {reasons && <td className="max-w-[360px] truncate px-2 py-1 text-[10px] text-muted-foreground" title={reasons[i] ?? ""}>{reasons[i] ?? ""}</td>}
                 </tr>
               );
             })}

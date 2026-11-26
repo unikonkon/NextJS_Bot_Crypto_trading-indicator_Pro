@@ -1,5 +1,5 @@
 import { INDICATORS } from "./indicators";
-import type { Bars, Category, IndicatorDef, Params, SignalArray } from "./types";
+import type { Bars, Category, ComputeContext, IndicatorDef, Params, Source } from "./types";
 
 const BY_ID = new Map<string, IndicatorDef>();
 for (const def of INDICATORS) {
@@ -40,6 +40,49 @@ export function categoriesInUse(): Category[] {
   return Array.from(new Set(INDICATORS.map((d) => d.category)));
 }
 
+export function sourceOf(def: IndicatorDef): Source {
+  return def.source ?? "v1";
+}
+
+export function sourcesInUse(): Source[] {
+  return Array.from(new Set(INDICATORS.map(sourceOf))).sort();
+}
+
+/** Signal or exposure engine for these params */
+export function engineOf(def: IndicatorDef, p: Params) {
+  return def.engine?.(p) ?? ({ kind: "signal" } as const);
+}
+
+/** Bars to skip before evaluation */
+export function warmupOf(def: IndicatorDef, p: Params, tfMinutes: number): number {
+  const w = def.warmupBars ? def.warmupBars(p, tfMinutes) : def.minBars;
+  return Math.max(0, Math.ceil(Number.isFinite(w) ? w : def.minBars));
+}
+
+/** Median spacing between bars, in minutes (0 when unknown) */
+export function detectTfMinutes(bars: Bars): number {
+  const gaps: number[] = [];
+  for (let i = 1; i <= Math.min(bars.length - 1, 200); i++) {
+    const g = bars.time[i] - bars.time[i - 1];
+    if (g > 0) gaps.push(g);
+  }
+  if (!gaps.length) return 0;
+  gaps.sort((a, b) => a - b);
+  return gaps[gaps.length >> 1] / 60000;
+}
+
+/**
+ * Where evaluation starts: after the indicator's warm-up, and — when the user asked to
+ * evaluate only the last `evalBars` bars — no earlier than that window.
+ */
+export function planRun(def: IndicatorDef, p: Params, bars: Bars, evalBars?: number) {
+  const tfMinutes = detectTfMinutes(bars);
+  const warmup = warmupOf(def, p, tfMinutes);
+  const windowStart = evalBars && evalBars > 0 ? bars.length - evalBars : 0;
+  const startIndex = Math.max(0, Math.min(bars.length, Math.max(warmup, windowStart)));
+  return { ctx: { startIndex, tfMinutes } as ComputeContext, warmup };
+}
+
 /**
  * Small LRU cache of compute() results keyed by indicator+params.
  * One instance per dataset — create a new one when the bars change.
@@ -52,21 +95,18 @@ export class ComputeCache {
     return this.bars;
   }
 
-  compute(def: IndicatorDef, p: Params): unknown {
-    const key = paramsKey(def.id, p);
+  compute(def: IndicatorDef, p: Params, ctx: ComputeContext): unknown {
+    const key = `${paramsKey(def.id, p)}@${ctx.startIndex}`;
     if (this.map.has(key)) {
       const v = this.map.get(key);
       this.map.delete(key);
       this.map.set(key, v);
       return v;
     }
-    const v = def.compute(this.bars, p);
+    const v = def.compute(this.bars, p, ctx);
     this.map.set(key, v);
     if (this.map.size > this.max) this.map.delete(this.map.keys().next().value as string);
     return v;
   }
 
-  signals(def: IndicatorDef, p: Params): SignalArray {
-    return def.signals(this.compute(def, p), this.bars, p);
-  }
 }

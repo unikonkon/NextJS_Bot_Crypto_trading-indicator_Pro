@@ -37,7 +37,50 @@ export interface ParamDef {
   min: number;
   max: number;
   step: number;
+  /** Rendered as an on/off switch (value 0 / 1) */
+  toggle?: boolean;
+  /** Only shown when another param has this value (e.g. filter settings when useFilter = 1) */
+  visibleWhen?: { key: string; value: number };
+  /** Shown but not editable (e.g. a mode the original source removed) */
+  locked?: boolean;
 }
+
+/** Where an indicator comes from — shown as a badge and usable as a filter */
+export type Source = "v1" | "v2" | "v3" | "v4" | "v5";
+
+export const SOURCE_LABELS: Record<Source, string> = {
+  v1: "V1 · ชุดเดิม",
+  v2: "V2 · TradingView ยอดนิยม",
+  v3: "V3 · OrderFlow",
+  v4: "V4 · YouTube",
+  v5: "V5 · SMC LuxAlgo",
+};
+
+/** How positions are filled: at the close of the signal bar, or at the next bar's open */
+export type FillMode = "close" | "nextOpen";
+
+/** Context passed to compute() — results depend on where evaluation starts */
+export interface ComputeContext {
+  /** First bar that may hold a position (everything before is warm-up) */
+  startIndex: number;
+  /** Detected bar spacing in minutes */
+  tfMinutes: number;
+}
+
+/**
+ * Target position per bar (decided at the close, executed at the next open):
+ * +x = long x of equity, −x = short, 0 = flat.
+ */
+export interface ExposureOutput {
+  exposure: number[];
+  /** Price at which a position was closed *inside* the bar (SL/TP touched) — null otherwise */
+  exitFill?: (number | null)[];
+}
+
+export type EngineKind =
+  | { kind: "signal" }
+  /** Strategy manages its own entries/exits; direction is fixed by the strategy */
+  | { kind: "exposure"; direction: TradeMode };
 
 export type Params = Record<string, number>;
 
@@ -119,15 +162,32 @@ export interface IndicatorDef<R = unknown> {
   id: string;
   name: string;
   category: Category;
+  /** Defaults to "v1" */
+  source?: Source;
   /** Thai: what triggers a bullish (+1) signal */
-  longRule: string;
+  longRule?: string;
   /** Thai: what triggers a bearish (-1) signal */
-  shortRule: string;
+  shortRule?: string;
+  /** Thai: free-form description (used when long/short rules don't apply, e.g. exposure strategies) */
+  description?: string;
   params: ParamDef[];
   /** Minimum bars needed before the indicator produces anything meaningful */
   minBars: number;
-  compute(bars: Bars, p: Params): R;
+  /** Warm-up bars before evaluation should start (defaults to minBars) */
+  warmupBars?(p: Params, tfMinutes: number): number;
+  /** Fill timing when the user leaves it on "auto" (defaults to "close") */
+  defaultFill?: FillMode;
+  compute(bars: Bars, p: Params, ctx: ComputeContext): R;
+  /** Used when engine(p) is "signal" (the default) */
   signals(r: R, bars: Bars, p: Params): SignalArray;
+  /** Which engine runs this indicator for the given params (defaults to signal) */
+  engine?(p: Params): EngineKind;
+  /** Used when engine(p) is "exposure" */
+  exposure?(r: R, bars: Bars, p: Params): ExposureOutput;
+  /** Per-bar explanation of what the strategy did / why it waited */
+  reasons?(r: R, p: Params): (string | null)[] | null;
+  /** Cross-parameter validation — returns a Thai message when invalid */
+  validate?(p: Params): string | null;
   plot?(r: R, bars: Bars, p: Params, ctx: PlotContext): PlotOutput;
 }
 
@@ -150,6 +210,8 @@ export interface StopRule {
 
 export interface BacktestConfig {
   mode: TradeMode;
+  /** "auto" = use the indicator's defaultFill */
+  fill: "auto" | FillMode;
   /** Fee per side, % */
   feesPct: number;
   /** Slippage per side, % */
@@ -163,6 +225,7 @@ export interface BacktestConfig {
 
 export const DEFAULT_CONFIG: BacktestConfig = {
   mode: "both",
+  fill: "auto",
   feesPct: 0.1,
   slippagePct: 0,
   stopLoss: { kind: "none", value: 2 },
@@ -186,6 +249,11 @@ export interface Trade {
   pnlPct: number;
   bars: number;
   exitReason: ExitReason;
+  /** Fraction of equity in the trade (1 = 100%) */
+  size: number;
+  /** The strategy's own explanation at entry / exit (v2–v5) */
+  entryNote?: string;
+  exitNote?: string;
 }
 
 export interface SideStats {
@@ -224,15 +292,27 @@ export interface BacktestStats {
   lastSignal: { dir: 1 | -1; barsAgo: number } | null;
 }
 
-export interface BacktestResult extends BacktestStats {
+export interface RunInfo {
+  engine: "signal" | "exposure";
+  fill: FillMode;
+  /** Direction actually traded (exposure strategies lock it) */
+  direction: TradeMode;
+  /** First evaluated bar; bars before it are warm-up */
+  startIndex: number;
+  warmupBars: number;
+}
+
+export interface BacktestResult extends BacktestStats, RunInfo {
   trades: Trade[];
   /** Mark-to-market equity, % per bar */
   equityCurve: number[];
   signals: number[];
+  /** Strategy's per-bar explanations (v2 filtered / v3–v5) */
+  reasons: (string | null)[] | null;
 }
 
 /** Light result for ranking many indicators at once */
-export interface BacktestSummary extends BacktestStats {
+export interface BacktestSummary extends BacktestStats, RunInfo {
   /** Downsampled equity curve for sparklines */
   spark: number[];
 }

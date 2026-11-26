@@ -5,7 +5,7 @@ import { ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown,
 import { cn } from "@/lib/utils";
 import type { Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
-import { getIndicator, listIndicators, normalizeParams } from "@/lib/engine/registry";
+import { getIndicator, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
 import { getPool, AbortedError } from "@/lib/engine/worker/pool";
 import { DEFAULT_CONFIG, type BacktestConfig, type BacktestResult, type Bars, type Params } from "@/lib/engine/types";
 import { useKlineData } from "./lib/use-kline-data";
@@ -18,9 +18,16 @@ import PriceChart, { type ChartIndicator } from "./ui/price-chart";
 import { IndicatorPicker } from "./ui/indicator-picker";
 import { StrategyPanel } from "./ui/strategy-panel";
 import { ResultsPanel } from "./ui/results-panel";
-import { RankingPanel, type RankRow, type RankScope } from "./ui/ranking-panel";
+import { RankingPanel, inScope, type RankRow, type RankScope } from "./ui/ranking-panel";
 
 type MobileTab = "chart" | "strategy" | "results" | "ranking";
+
+/** Upper bound of bars fetched (evaluation window + warm-up) — 20 Binance requests */
+const MAX_BARS = 20_000;
+const INTERVAL_MINUTES: Record<string, number> = {
+  "1s": 1 / 60, "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240,
+  "6h": 360, "8h": 480, "12h": 720, "1d": 1440, "3d": 4320, "1w": 10080, "1M": 43200,
+};
 type SideTab = "strategy" | "ranking";
 
 const NAV: { tab: MobileTab; label: string; icon: typeof ChartLineUp }[] = [
@@ -57,21 +64,6 @@ export default function KlinesPage() {
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  // ─── Data ─────────────────────────────────────────────────
-  const bars = useMemo<Bars>(() => toBars(data.klines), [data.klines]);
-  const sourceRef = useRef(data.source);
-  useEffect(() => { sourceRef.current = data.source; }, [data.source]);
-
-  const { loadLatest, loadRange, setError } = data;
-  useEffect(() => {
-    if (!ready) return;
-    const src = sourceRef.current;
-    if (src?.kind === "range") loadRange(symbol, interval, src.start, src.end);
-    else loadLatest(symbol, interval, limit);
-    // Reload only when the market changes; limit/range changes go through the data sheet
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, symbol, interval, loadLatest, loadRange]);
-
   // ─── Strategy ─────────────────────────────────────────────
   const def = getIndicator(strategyId) ?? listIndicators()[0];
   const params = useMemo(() => normalizeParams(def, paramsById[def.id]), [def, paramsById]);
@@ -86,43 +78,105 @@ export default function KlinesPage() {
     setFavorites((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }, [setFavorites]);
 
+  // ─── Chart indicators: strategy + extra overlays ──────────
+  const chartIndicators = useMemo<ChartIndicator[]>(() => {
+    const list: ChartIndicator[] = [{ def, params, isStrategy: true }];
+    for (const id of overlayIds) {
+      if (id === def.id) continue;
+      const d = getIndicator(id);
+      if (d) list.push({ def: d, params: normalizeParams(d, paramsById[id]), isStrategy: false });
+    }
+    return list;
+  }, [def, params, overlayIds, paramsById]);
+
+  // ─── Data: evaluation window + automatic warm-up history ──
+  const bars = useMemo<Bars>(() => toBars(data.klines), [data.klines]);
+  const sourceRef = useRef(data.source);
+  useEffect(() => { sourceRef.current = data.source; }, [data.source]);
+  const { loadLatest, loadRange, setError } = data;
+
+  /** "Latest N bars" = evaluate the last N bars; the warm-up history is fetched on top */
+  const isLatest = !data.source || data.source.kind === "latest";
+  const evalBars = isLatest ? limit : undefined;
+  const tfMinutes = INTERVAL_MINUTES[interval] ?? 60;
+  const strategyWarmup = useMemo(() => warmupOf(def, params, tfMinutes), [def, params, tfMinutes]);
+  const [rankWarmup, setRankWarmup] = useState(0);
+  const neededWarmup = useMemo(
+    () => Math.max(rankWarmup, ...chartIndicators.map((c) => warmupOf(c.def, c.params, tfMinutes))),
+    [chartIndicators, rankWarmup, tfMinutes],
+  );
+  const desiredTotal = Math.min(MAX_BARS, limit + neededWarmup);
+  const desiredRef = useRef(desiredTotal);
+  useEffect(() => { desiredRef.current = desiredTotal; }, [desiredTotal]);
+  const requestedRef = useRef("");
+
+  // Reload when the market changes
+  useEffect(() => {
+    if (!ready) return;
+    const src = sourceRef.current;
+    if (src?.kind === "range") { loadRange(symbol, interval, src.start, src.end); return; }
+    requestedRef.current = `${symbol}|${interval}|${desiredRef.current}`;
+    loadLatest(symbol, interval, desiredRef.current);
+  }, [ready, symbol, interval, loadLatest, loadRange]);
+
+  // Fetch more history when a strategy needs a longer warm-up than what is loaded
+  useEffect(() => {
+    if (!ready || data.loading || !isLatest || data.klines.length === 0 || bars.length >= desiredTotal) return;
+    const key = `${symbol}|${interval}|${desiredTotal}`;
+    if (requestedRef.current === key) return; // already asked — the exchange may simply have less history
+    requestedRef.current = key;
+    loadLatest(symbol, interval, desiredTotal);
+  }, [ready, data.loading, data.klines.length, isLatest, bars.length, desiredTotal, symbol, interval, loadLatest]);
+
   // ─── Single backtest (auto-runs on the worker pool, debounced) ──
   const [single, setSingle] = useState<{ bars: Bars; result: BacktestResult } | null>(null);
   const [running, setRunning] = useState(false);
-  const minBars = Math.max(50, def.minBars);
+  const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
     if (data.klines.length) getPool().setData(data.klines);
   }, [data.klines]);
 
   useEffect(() => {
-    if (bars.length < minBars) { setRunning(false); return; }
+    if (bars.length === 0) { setRunning(false); return; }
     const ctrl = new AbortController();
     setRunning(true);
     const t = setTimeout(() => {
       getPool()
-        .run({ indicatorId: def.id, params, config, full: true }, ctrl.signal)
-        .then((result) => { if (!ctrl.signal.aborted) setSingle({ bars, result }); })
-        .catch((err) => { if (!(err instanceof AbortedError)) setError(`Backtest ล้มเหลว: ${err instanceof Error ? err.message : String(err)}`); })
+        .run({ indicatorId: def.id, params, config, full: true, evalBars }, ctrl.signal)
+        .then((result) => { if (!ctrl.signal.aborted) { setSingle({ bars, result }); setRunError(null); } })
+        .catch((err) => {
+          if (err instanceof AbortedError || ctrl.signal.aborted) return;
+          setSingle(null);
+          setRunError(err instanceof Error ? err.message : String(err));
+        })
         .finally(() => { if (!ctrl.signal.aborted) setRunning(false); });
     }, 180);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [bars, def, params, config, minBars, setError]);
+  }, [bars, def, params, config, evalBars]);
 
   // A result only belongs to the bars it was computed on
   const result = single && single.bars === bars ? single.result : null;
 
-  // ─── Ranking (many indicators in parallel) ────────────────
+  // ─── Ranking (many indicators in parallel, same evaluation window) ──
   const [rank, setRank] = useState<{ rows: RankRow[]; bars: Bars; configKey: string } | null>(null);
   const [rankRunning, setRankRunning] = useState(false);
   const [rankProgress, setRankProgress] = useState<{ done: number; total: number } | null>(null);
+  const [rankPending, setRankPending] = useState<{ since: Date | null } | null>(null);
   const rankCtrl = useRef<AbortController | null>(null);
-  const configKey = JSON.stringify(config);
+  const configKey = `${JSON.stringify(config)}|${evalBars ?? "all"}`;
 
-  const runRanking = useCallback(async () => {
-    const defs = listIndicators().filter((d) =>
-      rankScope === "all" ? true : rankScope === "fav" ? favorites.includes(d.id) : d.category === rankScope);
+  const runRanking = useCallback(async (afterReload = false) => {
+    const defs = listIndicators().filter((d) => inScope(d, rankScope, favorites));
     if (!defs.length || bars.length < 50) return;
+    // Every indicator must be evaluated on the same window → load enough history for the longest warm-up first
+    const maxWarm = Math.max(0, ...defs.map((d) => warmupOf(d, normalizeParams(d, paramsById[d.id]), tfMinutes)));
+    if (isLatest && !afterReload && bars.length < Math.min(MAX_BARS, limit + maxWarm)) {
+      setRankWarmup(maxWarm);
+      setRankRunning(true);
+      setRankPending({ since: data.loadedAt });
+      return;
+    }
     rankCtrl.current?.abort();
     const ctrl = new AbortController();
     rankCtrl.current = ctrl;
@@ -130,15 +184,14 @@ export default function KlinesPage() {
     setRankProgress({ done: 0, total: defs.length });
     try {
       const outs = await getPool().runMany(
-        defs.map((d) => ({ indicatorId: d.id, params: paramsById[d.id], config, full: false as const })),
+        defs.map((d) => ({ indicatorId: d.id, params: paramsById[d.id], config, full: false as const, evalBars })),
         (done, total) => setRankProgress({ done, total }),
         ctrl.signal,
       );
       const rows: RankRow[] = defs.map((d, i) => {
         const o = outs[i];
-        return o instanceof Error
-          ? { id: d.id, name: d.name, category: d.category, summary: null, error: o.message }
-          : { id: d.id, name: d.name, category: d.category, summary: o as RankRow["summary"] };
+        const base = { id: d.id, name: d.name, category: d.category, source: sourceOf(d) };
+        return o instanceof Error ? { ...base, summary: null, error: o.message } : { ...base, summary: o as RankRow["summary"] };
       });
       setRank({ rows, bars, configKey });
     } catch (err) {
@@ -150,21 +203,23 @@ export default function KlinesPage() {
         rankCtrl.current = null;
       }
     }
-  }, [rankScope, favorites, bars, paramsById, config, configKey, setError]);
+  }, [rankScope, favorites, bars, paramsById, config, configKey, setError, tfMinutes, isLatest, limit, evalBars, data.loadedAt]);
 
-  const cancelRanking = useCallback(() => rankCtrl.current?.abort(), []);
+  // Run the ranking once the extra warm-up history has arrived (or the exchange had no more)
+  useEffect(() => {
+    if (!rankPending || data.loading) return;
+    const enough = bars.length >= Math.min(MAX_BARS, limit + rankWarmup);
+    if (!enough && data.loadedAt === rankPending.since) return;
+    setRankPending(null);
+    void runRanking(true);
+  }, [rankPending, data.loading, data.loadedAt, bars.length, limit, rankWarmup, runRanking]);
+
+  const cancelRanking = useCallback(() => {
+    rankCtrl.current?.abort();
+    setRankPending(null);
+    setRankRunning(false);
+  }, []);
   const rankStale = !!rank && (rank.bars !== bars || rank.configKey !== configKey);
-
-  // ─── Chart indicators: strategy + extra overlays ──────────
-  const chartIndicators = useMemo<ChartIndicator[]>(() => {
-    const list: ChartIndicator[] = [{ def, params, isStrategy: true }];
-    for (const id of overlayIds) {
-      if (id === def.id) continue;
-      const d = getIndicator(id);
-      if (d) list.push({ def: d, params: normalizeParams(d, paramsById[id]), isStrategy: false });
-    }
-    return list;
-  }, [def, params, overlayIds, paramsById]);
 
   // ─── Navigation helpers ───────────────────────────────────
   const showResults = useCallback(() => {
@@ -195,7 +250,7 @@ export default function KlinesPage() {
         onInterval={setInterval}
         lastClose={lastClose}
         changePct={changePct}
-        barCount={bars.length}
+        barCount={evalBars ?? bars.length}
         loading={data.loading}
         onOpenData={() => setDataOpen(true)}
       />
@@ -245,7 +300,7 @@ export default function KlinesPage() {
               </div>
 
               {bars.length > 0 ? (
-                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} />
+                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} />
               ) : (
                 <div className="grid h-[320px] place-items-center text-xs text-muted-foreground lg:h-[460px]">
                   {data.loading ? `กำลังโหลด ${symbol} ${interval}…${data.progress ? ` ${data.progress.toLocaleString()} แท่ง` : ""}` : "ยังไม่มีข้อมูล — กดปุ่ม “ข้อมูล” ด้านบน"}
@@ -256,7 +311,7 @@ export default function KlinesPage() {
               <button type="button" onClick={showResults} disabled={!result} className="flex w-full items-center gap-3 border-t px-3 py-2 text-left hover:bg-muted/40 disabled:hover:bg-transparent">
                 <div className="min-w-0 flex-1">
                   <p className="text-[10px] text-muted-foreground">
-                    {running ? "กำลังทดสอบ…" : bars.length < minBars && bars.length > 0 ? `ต้องมีอย่างน้อย ${minBars} แท่ง` : "ผลทดสอบย้อนหลัง (ทบต้น)"}
+                    {data.loading ? "กำลังโหลดข้อมูล…" : running ? "กำลังทดสอบ…" : runError ?? "ผลทดสอบย้อนหลัง (ทบต้น)"}
                   </p>
                   <p className="flex flex-wrap items-baseline gap-x-2 text-[11px] tabular-nums">
                     <span className={cn("text-base font-bold", result ? toneClass(result.totalReturnPct) : "text-muted-foreground")}>{result ? fmtPct(result.totalReturnPct) : "—"}</span>
@@ -308,8 +363,10 @@ export default function KlinesPage() {
               config={config}
               onConfig={setConfig}
               result={result}
-              running={running}
-              barCount={bars.length}
+              running={running || data.loading}
+              runError={data.loading ? null : runError}
+              warmup={strategyWarmup}
+              evalBars={evalBars}
               onShowResults={showResults}
             />
           </section>
@@ -326,7 +383,7 @@ export default function KlinesPage() {
               workers={ready ? getPool().size : 1}
               barCount={bars.length}
               currentId={def.id}
-              onRun={runRanking}
+              onRun={() => void runRanking()}
               onCancel={cancelRanking}
               onApply={applyFromRanking}
             />
@@ -392,7 +449,13 @@ export default function KlinesPage() {
         loading={data.loading}
         progress={data.progress}
         csvFiles={data.csvFiles}
-        onLatest={(l) => { setLimit(l); loadLatest(symbol, interval, l); }}
+        onLatest={(l) => {
+          setLimit(l);
+          const total = Math.min(MAX_BARS, l + neededWarmup);
+          requestedRef.current = `${symbol}|${interval}|${total}`;
+          loadLatest(symbol, interval, total);
+        }}
+        warmup={neededWarmup}
         onRange={(s, e) => loadRange(symbol, interval, s, e)}
         onCsv={data.loadCsv}
         onCancel={data.cancel}

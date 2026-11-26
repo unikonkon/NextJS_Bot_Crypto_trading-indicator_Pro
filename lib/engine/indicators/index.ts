@@ -7,6 +7,8 @@
  *    2. Import it below and append it to INDICATORS
  *  The UI (picker, param form, chart, ranking) and the worker pool
  *  read everything from this list automatically.
+ *  Indicators from lib/indicators-v2..v5.ts are wrapped by adapters (v2.ts, v3.ts) that call the
+ *  original code unchanged.
  */
 import type { IndicatorDef } from "../types";
 
@@ -29,6 +31,8 @@ import adxDmi from "./adx-dmi";
 import cci from "./cci";
 import vwap from "./vwap";
 import obv from "./obv";
+import { V2_DEFS } from "./v2";
+import { V3_DEFS } from "./v3";
 
 export const INDICATORS: IndicatorDef[] = [
   rsi,
@@ -50,4 +54,8 @@ export const INDICATORS: IndicatorDef[] = [
   cci,
   vwap,
   obv,
+  // lib/indicators-v2.ts — 20 TradingView-popular indicators (raw or filtered)
+  ...V2_DEFS,
+  // lib/indicators-v3/v4/v5 — exposure strategies with their own exits
+  ...V3_DEFS,
 ];

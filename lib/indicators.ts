@@ -381,12 +381,26 @@ export interface SMCResult {
  * Detect swing legs — a pivot high occurs when high[size] > highest(size bars after)
  * and pivot low when low[size] < lowest(size bars after).
  */
-function detectPivots(
-  h: number[], l: number[], size: number
-): { pivotHighs: (number | null)[]; pivotLows: (number | null)[] } {
+interface PivotSeries {
+  /** Pivot price, stored at the bar where the pivot becomes *known* (pivot bar + size) */
+  pivotHighs: (number | null)[];
+  pivotLows: (number | null)[];
+  /** Index of the actual pivot bar, aligned with pivotHighs/pivotLows */
+  pivotHighIdx: (number | null)[];
+  pivotLowIdx: (number | null)[];
+}
+
+/**
+ * A bar is a pivot when it is the extreme of `size` bars on each side, so it can
+ * only be confirmed `size` bars later. Values are placed at the confirmation bar
+ * (like Pine's ta.pivothigh) — never at the pivot bar itself, which would use future data.
+ */
+function detectPivots(h: number[], l: number[], size: number): PivotSeries {
   const len = h.length;
   const pivotHighs: (number | null)[] = new Array(len).fill(null);
   const pivotLows: (number | null)[] = new Array(len).fill(null);
+  const pivotHighIdx: (number | null)[] = new Array(len).fill(null);
+  const pivotLowIdx: (number | null)[] = new Array(len).fill(null);
 
   for (let i = size; i < len - size; i++) {
     let isHigh = true;
@@ -395,10 +409,10 @@ function detectPivots(
       if (h[i] <= h[i - j] || h[i] <= h[i + j]) isHigh = false;
       if (l[i] >= l[i - j] || l[i] >= l[i + j]) isLow = false;
     }
-    if (isHigh) pivotHighs[i] = h[i];
-    if (isLow) pivotLows[i] = l[i];
+    if (isHigh) { pivotHighs[i + size] = h[i]; pivotHighIdx[i + size] = i; }
+    if (isLow) { pivotLows[i + size] = l[i]; pivotLowIdx[i + size] = i; }
   }
-  return { pivotHighs, pivotLows };
+  return { pivotHighs, pivotLows, pivotHighIdx, pivotLowIdx };
 }
 
 /**
@@ -408,8 +422,9 @@ function detectPivots(
  */
 function detectStructure(
   c: number[], _h: number[], _l: number[],
-  pivotHighs: (number | null)[], pivotLows: (number | null)[],
+  pivots: PivotSeries,
 ): { structures: SMCStructureBreak[]; trend: (SMCBias | null)[] } {
+  const { pivotHighs, pivotLows, pivotHighIdx, pivotLowIdx } = pivots;
   const len = c.length;
   const structures: SMCStructureBreak[] = [];
   const trend: (SMCBias | null)[] = new Array(len).fill(null);
@@ -421,10 +436,10 @@ function detectStructure(
   for (let i = 0; i < len; i++) {
     // Update pivots
     if (pivotHighs[i] !== null) {
-      lastPivotHigh = { price: pivotHighs[i]!, index: i, crossed: false };
+      lastPivotHigh = { price: pivotHighs[i]!, index: pivotHighIdx[i]!, crossed: false };
     }
     if (pivotLows[i] !== null) {
-      lastPivotLow = { price: pivotLows[i]!, index: i, crossed: false };
+      lastPivotLow = { price: pivotLows[i]!, index: pivotLowIdx[i]!, crossed: false };
     }
 
     // Check bullish break (close crosses above pivot high)
@@ -598,9 +613,8 @@ function detectFairValueGaps(
 /**
  * Detect swing point labels (HH, HL, LH, LL)
  */
-function detectSwingPoints(
-  pivotHighs: (number | null)[], pivotLows: (number | null)[],
-): SMCSwingPoint[] {
+function detectSwingPoints(pivots: PivotSeries): SMCSwingPoint[] {
+  const { pivotHighs, pivotLows, pivotHighIdx, pivotLowIdx } = pivots;
   const points: SMCSwingPoint[] = [];
   let lastHigh: number | null = null;
   let lastLow: number | null = null;
@@ -611,7 +625,7 @@ function detectSwingPoints(
       let type: SMCSwingPoint["type"];
       if (lastHigh === null) type = "H";
       else type = price > lastHigh ? "HH" : "LH";
-      points.push({ index: i, price, type });
+      points.push({ index: pivotHighIdx[i]!, price, type });
       lastHigh = price;
     }
     if (pivotLows[i] !== null) {
@@ -619,7 +633,7 @@ function detectSwingPoints(
       let type: SMCSwingPoint["type"];
       if (lastLow === null) type = "L";
       else type = price > lastLow ? "HL" : "LL";
-      points.push({ index: i, price, type });
+      points.push({ index: pivotLowIdx[i]!, price, type });
       lastLow = price;
     }
   }
@@ -720,8 +734,8 @@ export function smartMoneyConcepts(
   const internalPivots = detectPivots(h, l, internalSize);
 
   // Detect structure
-  const swingResult = detectStructure(c, h, l, swingPivots.pivotHighs, swingPivots.pivotLows);
-  const internalResult = detectStructure(c, h, l, internalPivots.pivotHighs, internalPivots.pivotLows);
+  const swingResult = detectStructure(c, h, l, swingPivots);
+  const internalResult = detectStructure(c, h, l, internalPivots);
 
   // Order Blocks
   const swingOBs = detectOrderBlocks(c, o, h, l, swingResult.structures);
@@ -731,7 +745,7 @@ export function smartMoneyConcepts(
   const fvgs = detectFairValueGaps(h, l, c, o, atrValues);
 
   // Swing Points
-  const swingPoints = detectSwingPoints(swingPivots.pivotHighs, swingPivots.pivotLows);
+  const swingPoints = detectSwingPoints(swingPivots);
 
   // Premium/Discount
   const premiumDiscount = detectPremiumDiscount(c, h, l, swingPivots.pivotHighs, swingPivots.pivotLows);
@@ -1262,21 +1276,22 @@ export function supportResistance(
       if (h[i] <= h[i + j]) isHigh = false;
       if (l[i] >= l[i + j]) isLow = false;
     }
-    if (isHigh) pivotHighs[i] = h[i];
-    if (isLow) pivotLows[i] = l[i];
+    // ta.pivothigh reports the pivot on its confirmation bar (pivot + rightBars)
+    if (isHigh) pivotHighs[i + rightBars] = h[i];
+    if (isLow) pivotLows[i + rightBars] = l[i];
   }
 
-  // fixnan — carry forward last non-null pivot, shifted by 1
+  // fixnan(pivot[1]) — carry forward the last confirmed pivot, shifted by 1 bar like the Pine source
   const resistance: (number | null)[] = new Array(len).fill(null);
   const support: (number | null)[] = new Array(len).fill(null);
   let lastPivotHigh: number | null = null;
   let lastPivotLow: number | null = null;
 
   for (let i = 0; i < len; i++) {
-    if (pivotHighs[i] !== null) lastPivotHigh = pivotHighs[i];
-    if (pivotLows[i] !== null) lastPivotLow = pivotLows[i];
     resistance[i] = lastPivotHigh;
     support[i] = lastPivotLow;
+    if (pivotHighs[i] !== null) lastPivotHigh = pivotHighs[i];
+    if (pivotLows[i] !== null) lastPivotLow = pivotLows[i];
   }
 
   // Volume oscillator: 100 * (EMA5 - EMA10) / EMA10
@@ -1337,11 +1352,18 @@ export interface TrendlinesResult {
   signal: ("BUY" | "SELL" | null)[];
 }
 
+/**
+ * @param confirmPivots true (default) = LuxAlgo without backpaint: a pivot is used only on its
+ *   confirmation bar (pivot + length) and the line is projected `length` bars forward to the
+ *   current bar — no future data. false = legacy behaviour that anchors lines on the pivot bar
+ *   itself, which reads `length` bars of future data (kept only for comparison).
+ */
 export function trendlinesWithBreaks(
   klines: KlineData[],
   length = 14,
   mult = 1.0,
   calcMethod: "Atr" | "Stdev" = "Atr",
+  confirmPivots = true,
 ): TrendlinesResult {
   const h = highs(klines);
   const l = lows(klines);
@@ -1358,9 +1380,12 @@ export function trendlinesWithBreaks(
       if (h[i] <= h[i - j] || h[i] <= h[i + j]) isHigh = false;
       if (l[i] >= l[i - j] || l[i] >= l[i + j]) isLow = false;
     }
-    if (isHigh) pivotHighs[i] = h[i];
-    if (isLow) pivotLows[i] = l[i];
+    const at = confirmPivots ? i + length : i;
+    if (isHigh) pivotHighs[at] = h[i];
+    if (isLow) pivotLows[at] = l[i];
   }
+  // Confirmed mode: the anchor sits `length` bars back, so project it to the current bar
+  const lag = confirmPivots ? length : 0;
 
   // Slope calculation
   const atrArr = atr(klines, length);
@@ -1406,8 +1431,10 @@ export function trendlinesWithBreaks(
       curLower = curLower + slopePl;
     }
 
-    upper[i] = curUpper;
-    lower[i] = curLower;
+    const upNow = curUpper - slopePh * lag;
+    const loNow = curLower + slopePl * lag;
+    upper[i] = upNow;
+    lower[i] = loNow;
 
     // Break detection
     const prevUpos = upos;
@@ -1415,13 +1442,13 @@ export function trendlinesWithBreaks(
 
     if (pivotHighs[i] !== null) {
       upos = 0;
-    } else if (c[i] > curUpper) {
+    } else if (c[i] > upNow) {
       upos = 1;
     }
 
     if (pivotLows[i] !== null) {
       dnos = 0;
-    } else if (c[i] < curLower) {
+    } else if (c[i] < loNow) {
       dnos = 1;
     }
 

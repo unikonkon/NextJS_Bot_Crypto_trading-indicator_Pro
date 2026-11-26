@@ -54,6 +54,7 @@ function SideCard({ side, s }: { side: "long" | "short"; s: SideStats }) {
 const PAGE = 20;
 
 function TradeList({ trades }: { trades: Trade[] }) {
+  const hasNotes = trades.some((t) => t.entryNote || t.exitNote);
   const [filter, setFilter] = useState<"all" | "long" | "short">("all");
   const [page, setPage] = useState(0);
   const list = useMemo(() => {
@@ -97,6 +98,7 @@ function TradeList({ trades }: { trades: Trade[] }) {
             <div className="min-w-0 flex-1 text-[10px] tabular-nums text-muted-foreground">
               <p className="truncate">{fmtDate(t.entryTime)} → {fmtDate(t.exitTime)}</p>
               <p className="truncate">{fmtPrice(t.entryPrice)} → {fmtPrice(t.exitPrice)} · {t.bars} แท่ง · {EXIT_REASON_LABEL[t.exitReason]}</p>
+              {t.exitNote && <p className="truncate text-foreground/70" title={`${t.entryNote ?? ""}\n${t.exitNote}`}>{t.exitNote}</p>}
             </div>
             <span className={cn("shrink-0 text-xs font-semibold tabular-nums", toneClass(t.pnlPct))}>{fmtPct(t.pnlPct)}</span>
           </li>
@@ -115,6 +117,7 @@ function TradeList({ trades }: { trades: Trade[] }) {
               <th className="px-2 py-1.5 text-right font-medium">ราคาออก</th>
               <th className="px-2 py-1.5 text-right font-medium">แท่ง</th>
               <th className="px-2 py-1.5 text-left font-medium">เหตุผลออก</th>
+              {hasNotes && <th className="px-2 py-1.5 text-left font-medium">เหตุผลจากกลยุทธ์ (เข้า → ออก)</th>}
               <th className="px-2 py-1.5 text-right font-medium">กำไร/ขาดทุน</th>
             </tr>
           </thead>
@@ -132,6 +135,12 @@ function TradeList({ trades }: { trades: Trade[] }) {
                 <td className="px-2 py-1.5 text-right">{fmtPrice(t.exitPrice)}</td>
                 <td className="px-2 py-1.5 text-right text-muted-foreground">{t.bars}</td>
                 <td className="px-2 py-1.5 text-muted-foreground">{EXIT_REASON_LABEL[t.exitReason]}</td>
+                {hasNotes && (
+                  <td className="max-w-[320px] px-2 py-1.5 text-[10px] leading-snug text-muted-foreground">
+                    {t.entryNote && <p className="truncate" title={t.entryNote}>▸ {t.entryNote}</p>}
+                    {t.exitNote && <p className="truncate" title={t.exitNote}>◂ {t.exitNote}</p>}
+                  </td>
+                )}
                 <td className={cn("px-2 py-1.5 text-right font-semibold", toneClass(t.pnlPct))}>{fmtPct(t.pnlPct)}</td>
               </tr>
             ))}
@@ -146,10 +155,12 @@ function TradeList({ trades }: { trades: Trade[] }) {
 export function ResultsPanel({ result, def, mode, bars, running }: Props) {
   const [showRaw, setShowRaw] = useState(false);
 
+  const start = result?.startIndex ?? 0;
   const benchmark = useMemo(() => {
-    const c0 = bars.close[0];
-    return bars.close.map((c) => ((c - c0) / c0) * 100);
-  }, [bars]);
+    const c0 = bars.close[start];
+    return bars.close.slice(start).map((c) => ((c - c0) / c0) * 100);
+  }, [bars, start]);
+  const curve = useMemo(() => result?.equityCurve.slice(start) ?? [], [result, start]);
 
   if (!result) {
     return (
@@ -161,6 +172,8 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
 
   const r = result;
   const beat = r.totalReturnPct - r.buyAndHoldPct;
+  const lastReason = r.reasons?.[r.reasons.length - 1] ?? null;
+  const evalCount = bars.length - r.startIndex;
   const exitCounts = r.trades.reduce<Record<string, number>>((m, t) => { m[t.exitReason] = (m[t.exitReason] ?? 0) + 1; return m; }, {});
 
   return (
@@ -169,7 +182,7 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
       <div className="border bg-card p-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="text-[10px] text-muted-foreground">{def.name} · {MODE_LABEL[mode]}</p>
+            <p className="text-[10px] text-muted-foreground">{def.name} · {MODE_LABEL[r.engine === "exposure" ? r.direction : mode]}</p>
             <p className={cn("text-3xl font-bold tabular-nums", toneClass(r.totalReturnPct))}>{fmtPct(r.totalReturnPct)}</p>
             <p className="text-[11px] text-muted-foreground">
               ซื้อแล้วถือ <span className={toneClass(r.buyAndHoldPct)}>{fmtPct(r.buyAndHoldPct)}</span>
@@ -194,8 +207,19 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
             )}
           </div>
         </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          ประเมิน {evalCount.toLocaleString()} แท่ง ตั้งแต่ {fmtDate(bars.time[r.startIndex], true)}
+          {r.startIndex > 0 && ` (อุ่นเครื่องก่อนหน้า ${r.startIndex.toLocaleString()} แท่ง)`}
+          {" · "}เข้า-ออกที่{r.fill === "nextOpen" ? "ราคาเปิดแท่งถัดไป" : "ราคาปิดแท่งสัญญาณ"}
+          {r.engine === "exposure" && " · กลยุทธ์จัดการการออกเอง"}
+        </p>
+        {lastReason && (
+          <p className="mt-1.5 border-l-2 border-primary/50 bg-muted/40 px-2 py-1.5 text-[11px] leading-snug">
+            <span className="text-[10px] text-muted-foreground">สถานะล่าสุดจากกลยุทธ์: </span>{lastReason}
+          </p>
+        )}
         <div className="mt-3">
-          <EquityChart curve={r.equityCurve} benchmark={benchmark} />
+          <EquityChart curve={curve} benchmark={benchmark} />
           <p className="mt-1 flex gap-3 text-[10px] text-muted-foreground">
             <span><span className="mr-1 inline-block h-0.5 w-3 bg-emerald-500 align-middle" />กลยุทธ์ (ทบต้น, รวมกำไรที่ยังไม่ปิด)</span>
             <span><span className="mr-1 inline-block w-3 border-t border-dashed border-current align-middle" />ซื้อแล้วถือ</span>
@@ -242,7 +266,7 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
           ข้อมูลแท่งเทียนดิบ ({bars.length.toLocaleString()} แท่ง)
           <CaretDown size={14} className={cn("transition-transform", showRaw && "rotate-180")} />
         </button>
-        {showRaw && <KlineTable bars={bars} signals={r.signals} />}
+        {showRaw && <KlineTable bars={bars} signals={r.signals} reasons={r.reasons} />}
       </div>
     </div>
   );

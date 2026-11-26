@@ -4,16 +4,26 @@ import { useMemo, useState } from "react";
 import { Play, Stop, TrendUp, TrendDown, Warning, Cpu } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { listIndicators, categoriesInUse } from "@/lib/engine/registry";
-import { CATEGORY_LABELS, type BacktestSummary, type Category, type TradeMode } from "@/lib/engine/types";
+import { listIndicators, categoriesInUse, sourcesInUse, sourceOf } from "@/lib/engine/registry";
+import { CATEGORY_LABELS, SOURCE_LABELS, type BacktestSummary, type Category, type IndicatorDef, type Source, type TradeMode } from "@/lib/engine/types";
+import { SourceBadge } from "./indicator-picker";
 import { Sparkline } from "./equity-chart";
 import { fmtPct, toneClass } from "../lib/format";
 
-export type RankScope = "all" | "fav" | Category;
+export type RankScope = "all" | "fav" | Category | Source;
+
+const SOURCE_SET = new Set<string>(["v1", "v2", "v3", "v4", "v5"]);
+export function inScope(d: IndicatorDef, scope: RankScope, favorites: string[]): boolean {
+  if (scope === "all") return true;
+  if (scope === "fav") return favorites.includes(d.id);
+  if (SOURCE_SET.has(scope)) return sourceOf(d) === scope;
+  return d.category === scope;
+}
 
 export interface RankRow {
   id: string;
   name: string;
+  source: Source;
   category: Category;
   summary: BacktestSummary | null;
   error?: string;
@@ -63,9 +73,10 @@ interface Props {
 export function RankingPanel(p: Props) {
   const [sort, setSort] = useState<SortKey>("return");
   const all = listIndicators();
-  const scopeCount = (s: RankScope) =>
-    s === "all" ? all.length : s === "fav" ? all.filter((d) => p.favorites.includes(d.id)).length : all.filter((d) => d.category === s).length;
-  const scopes: RankScope[] = ["all", "fav", ...categoriesInUse()];
+  const scopeCount = (s: RankScope) => all.filter((d) => inScope(d, s, p.favorites)).length;
+  const scopes: RankScope[] = ["all", "fav", ...sourcesInUse(), ...categoriesInUse()];
+  const scopeLabel = (s: RankScope) =>
+    s === "all" ? "ทั้งหมด" : s === "fav" ? "★ โปรด" : SOURCE_SET.has(s) ? SOURCE_LABELS[s as Source].split(" · ")[0] : CATEGORY_LABELS[s as Category];
 
   const sorted = useMemo(() => {
     if (!p.rows) return null;
@@ -108,13 +119,13 @@ export function RankingPanel(p: Props) {
                   p.scope === s ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {s === "all" ? "ทั้งหมด" : s === "fav" ? "★ โปรด" : CATEGORY_LABELS[s]} <span className="opacity-60">{n}</span>
+                {scopeLabel(s)} <span className="opacity-60">{n}</span>
               </button>
             );
           })}
         </div>
         <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          <Cpu size={12} /> ใช้ {p.workers} worker · โหมด {MODE_LABEL[p.mode]} · SL/TP/ค่าธรรมเนียมตามแท็บกลยุทธ์
+          <Cpu size={12} /> ใช้ {p.workers} worker · ทุกตัวประเมินช่วงเดียวกัน · indicator สัญญาณใช้โหมด {MODE_LABEL[p.mode]} + SL/TP ตามแท็บกลยุทธ์ · กลยุทธ์ที่ “ออกเอง” ใช้กฎของตัวเอง
         </p>
       </section>
 
@@ -176,6 +187,7 @@ export function RankingPanel(p: Props) {
                     <span className={cn("w-5 shrink-0 self-start text-center text-[11px] tabular-nums", i < 3 && s ? "font-bold" : "text-muted-foreground")}>{s ? i + 1 : "–"}</span>
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-baseline gap-2">
+                        <SourceBadge source={row.source} />
                         <span className="min-w-0 flex-1 truncate text-xs font-medium">{row.name}</span>
                         <span className={cn("shrink-0 text-xs font-semibold tabular-nums", s ? toneClass(s.totalReturnPct) : "text-muted-foreground")}>
                           {s ? fmtPct(s.totalReturnPct, 1) : "—"}

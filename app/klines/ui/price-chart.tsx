@@ -18,7 +18,7 @@ import {
   type Time,
   type MouseEventParams,
 } from "lightweight-charts";
-import { ComputeCache } from "@/lib/engine/registry";
+import { ComputeCache, planRun } from "@/lib/engine/registry";
 import type { Bars, IndicatorDef, Params, PlotOutput, SeriesPlot, Trade } from "@/lib/engine/types";
 import { fmtPrice } from "../lib/format";
 
@@ -35,6 +35,8 @@ interface Props {
   trades: Trade[] | null;
   showTrades: boolean;
   compact: boolean;
+  /** Same evaluation window as the backtest, so stateful strategies plot identically */
+  evalBars?: number;
 }
 
 const UP = "#10b981";
@@ -102,7 +104,7 @@ function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number) {
     `<b style="color:${tone}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</b>`;
 }
 
-export default function PriceChart({ bars, indicators, trades, showTrades, compact }: Props) {
+export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -122,17 +124,19 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
   // Indicator plots, computed on the main thread (only the few shown on the chart)
   const cache = useMemo(() => new ComputeCache(bars, 24), [bars]);
   const plots = useMemo(() => {
-    const out: { ind: ChartIndicator; plot: PlotOutput }[] = [];
+    const out: { ind: ChartIndicator; plot: PlotOutput; startIndex: number }[] = [];
     for (const ind of indicators) {
       if (!ind.def.plot || bars.length < ind.def.minBars) continue;
       try {
-        out.push({ ind, plot: ind.def.plot(cache.compute(ind.def, ind.params), bars, ind.params, { dark }) });
+        const { ctx } = planRun(ind.def, ind.params, bars, evalBars);
+        if (ctx.startIndex >= bars.length) continue;
+        out.push({ ind, startIndex: ctx.startIndex, plot: ind.def.plot(cache.compute(ind.def, ind.params, ctx), bars, ind.params, { dark }) });
       } catch (err) {
         console.error(`[chart] plot failed for ${ind.def.id}`, err);
       }
     }
     return out;
-  }, [cache, indicators, bars, dark]);
+  }, [cache, indicators, bars, dark, evalBars]);
 
   const paneCount = plots.reduce((n, p) => n + (p.plot.panes?.length ?? 0), 0);
   const height = (compact ? 320 : 460) + paneCount * (compact ? 110 : 140);
@@ -291,6 +295,11 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
           markers.push({ time: toUTC(bars.time[m.index]), position: m.position, color: m.color, shape: m.shape, text: m.text });
         }
       }
+    }
+    // Where the backtest starts counting (everything before is warm-up)
+    const start = plots.find((p) => p.ind.isStrategy)?.startIndex ?? 0;
+    if (start > 0 && start < bars.length) {
+      markers.push({ time: toUTC(bars.time[start]), position: "aboveBar", color: "#f59e0b", shape: "square", text: "เริ่มประเมิน" });
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     api.setMarkers(markers);

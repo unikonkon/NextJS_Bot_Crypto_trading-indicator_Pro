@@ -5,10 +5,26 @@ import { MagnifyingGlass, Star, Check, TrendUp, TrendDown } from "@phosphor-icon
 import { Sheet } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { listIndicators, categoriesInUse } from "@/lib/engine/registry";
-import { CATEGORY_LABELS, type Category } from "@/lib/engine/types";
+import { listIndicators, categoriesInUse, sourcesInUse, sourceOf, engineOf, defaultParams } from "@/lib/engine/registry";
+import { CATEGORY_LABELS, SOURCE_LABELS, type Category, type IndicatorDef, type Source } from "@/lib/engine/types";
 
 type Filter = "all" | "fav" | Category;
+
+/** "Exits on its own" badge for strategies that run on the exposure engine by default */
+export function managesExits(d: IndicatorDef): boolean {
+  return engineOf(d, defaultParams(d)).kind === "exposure";
+}
+
+export function SourceBadge({ source, className }: { source: Source; className?: string }) {
+  const tone: Record<Source, string> = {
+    v1: "border-border text-muted-foreground",
+    v2: "border-sky-500/40 text-sky-500",
+    v3: "border-violet-500/40 text-violet-500",
+    v4: "border-amber-500/40 text-amber-500",
+    v5: "border-emerald-500/40 text-emerald-500",
+  };
+  return <span className={cn("shrink-0 border px-1 text-[9px] font-semibold uppercase", tone[source], className)}>{source}</span>;
+}
 
 interface Props {
   open: boolean;
@@ -29,6 +45,7 @@ interface Props {
 export function IndicatorPicker({ open, onClose, title, description, selected, onPick, multi, plottableOnly, favorites, onToggleFavorite }: Props) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [source, setSource] = useState<Source | "all">("all");
   const all = listIndicators();
 
   const items = useMemo(() => {
@@ -37,10 +54,11 @@ export function IndicatorPicker({ open, onClose, title, description, selected, o
       if (plottableOnly && !d.plot) return false;
       if (filter === "fav" && !favorites.includes(d.id)) return false;
       if (filter !== "all" && filter !== "fav" && d.category !== filter) return false;
+      if (source !== "all" && sourceOf(d) !== source) return false;
       if (!q) return true;
-      return `${d.name} ${d.id} ${d.longRule} ${d.shortRule} ${CATEGORY_LABELS[d.category]}`.toLowerCase().includes(q);
+      return `${d.name} ${d.id} ${d.longRule ?? ""} ${d.shortRule ?? ""} ${d.description ?? ""} ${CATEGORY_LABELS[d.category]} ${sourceOf(d)}`.toLowerCase().includes(q);
     });
-  }, [all, query, filter, favorites, plottableOnly]);
+  }, [all, query, filter, source, favorites, plottableOnly]);
 
   const filters: { value: Filter; label: string }[] = [
     { value: "all", label: `ทั้งหมด ${all.length}` },
@@ -76,6 +94,22 @@ export function IndicatorPicker({ open, onClose, title, description, selected, o
             </button>
           ))}
         </div>
+        <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
+          {(["all", ...sourcesInUse()] as (Source | "all")[]).map((src) => (
+            <button
+              key={src}
+              type="button"
+              onClick={() => setSource(src)}
+              title={src === "all" ? "ทุกแหล่ง" : SOURCE_LABELS[src]}
+              className={cn(
+                "h-7 shrink-0 border px-2.5 text-[11px] font-medium transition-colors",
+                source === src ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {src === "all" ? "ทุกแหล่ง" : SOURCE_LABELS[src]}
+            </button>
+          ))}
+        </div>
       </div>
 
       <ul className="divide-y">
@@ -98,12 +132,15 @@ export function IndicatorPicker({ open, onClose, title, description, selected, o
                   <span className={cn("grid size-4 shrink-0 place-items-center border", isSel ? "border-primary bg-primary text-primary-foreground" : "border-border")}>
                     {isSel && <Check size={10} weight="bold" />}
                   </span>
+                  <SourceBadge source={sourceOf(d)} />
                   <span className="truncate text-xs font-semibold">{d.name}</span>
                   <span className="shrink-0 border px-1.5 text-[9px] text-muted-foreground">{CATEGORY_LABELS[d.category]}</span>
+                  {managesExits(d) && <span className="shrink-0 border border-amber-500/40 px-1.5 text-[9px] text-amber-500">ออกเอง</span>}
                 </div>
                 <div className="mt-1.5 space-y-0.5 pl-6 text-[11px] leading-snug text-muted-foreground">
-                  <p className="flex gap-1.5"><TrendUp size={13} className="mt-px shrink-0 text-emerald-500" />{d.longRule}</p>
-                  <p className="flex gap-1.5"><TrendDown size={13} className="mt-px shrink-0 text-red-500" />{d.shortRule}</p>
+                  {d.longRule && <p className="flex gap-1.5"><TrendUp size={13} className="mt-px shrink-0 text-emerald-500" />{d.longRule}</p>}
+                  {d.shortRule && <p className="flex gap-1.5"><TrendDown size={13} className="mt-px shrink-0 text-red-500" />{d.shortRule}</p>}
+                  {!d.longRule && d.description && <p className="line-clamp-3">{d.description}</p>}
                 </div>
               </button>
               <button

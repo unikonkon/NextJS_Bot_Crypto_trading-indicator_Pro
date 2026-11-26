@@ -31,6 +31,8 @@ interface Props {
   onCsv: (file: string) => void;
   onCancel: () => void;
   onDownload: () => void;
+  /** Extra history loaded before the evaluation window for indicator warm-up */
+  warmup: number;
 }
 
 export function DataSheet(p: Props) {
@@ -49,7 +51,7 @@ export function DataSheet(p: Props) {
         <div className="space-y-2">
           {p.barCount > 0 && p.firstTime !== null && p.lastTime !== null && (
             <p className="text-[10px] tabular-nums text-muted-foreground">
-              ตอนนี้: {p.barCount.toLocaleString()} แท่ง · {fmtDate(p.firstTime, true)} → {fmtDate(p.lastTime, true)}
+              โหลดจริง: {p.barCount.toLocaleString()} แท่ง (รวมอุ่นเครื่อง) · {fmtDate(p.firstTime, true)} → {fmtDate(p.lastTime, true)}
               {p.loadedAt && ` · โหลดเมื่อ ${p.loadedAt.toLocaleTimeString()}`}
             </p>
           )}
@@ -72,7 +74,10 @@ export function DataSheet(p: Props) {
 
         {tab === "latest" && (
           <div className="space-y-3">
-            <p className="text-[11px] text-muted-foreground">ดึงแท่งเทียนล่าสุดจาก Binance (เกิน 1,000 แท่งจะดึงหลายรอบอัตโนมัติ)</p>
+            <p className="text-[11px] text-muted-foreground">
+              ประเมินผลบน N แท่งล่าสุด และดึงข้อมูลย้อนหลังเพิ่มอีก {p.warmup.toLocaleString()} แท่งให้ indicator อุ่นเครื่องอัตโนมัติ
+              (รวมสูงสุด 20,000 แท่ง · เกิน 1,000 แท่งจะดึงหลายรอบ)
+            </p>
             <div className="grid grid-cols-5 gap-1">
               {LIMITS.map((l) => (
                 <button key={l} type="button" onClick={() => setLimit(l)}
@@ -89,7 +94,7 @@ export function DataSheet(p: Props) {
 
         {tab === "range" && (
           <div className="space-y-3">
-            <p className="text-[11px] text-muted-foreground">ดึงข้อมูลย้อนหลังทุกแท่งในช่วงที่เลือก (ช่วงยาวอาจใช้เวลาหลายวินาที)</p>
+            <p className="text-[11px] text-muted-foreground">ดึงข้อมูลย้อนหลังทุกแท่งในช่วงที่เลือก (ช่วงยาวอาจใช้เวลาหลายวินาที) · แต่ละ indicator จะเริ่มประเมินหลังช่วงอุ่นเครื่องของตัวเอง</p>
             <label className="block space-y-1">
               <span className="text-[11px] font-medium">เริ่มต้น</span>
               <Input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} className="h-10" />

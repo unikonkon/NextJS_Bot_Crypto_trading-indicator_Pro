@@ -1,13 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Minus, Plus, Warning, ChartLineUp } from "@phosphor-icons/react";
+import { CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Minus, Plus, Warning, ChartLineUp, LockSimple, Info } from "@phosphor-icons/react";
 import { Segmented } from "@/components/ui/segmented";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { engineOf, sourceOf } from "@/lib/engine/registry";
+import { SourceBadge } from "./indicator-picker";
 import {
   CATEGORY_LABELS,
+  SOURCE_LABELS,
   type BacktestConfig,
+  type FillMode,
   type BacktestResult,
   type IndicatorDef,
   type ParamDef,
@@ -28,7 +32,11 @@ interface Props {
   onConfig: (c: BacktestConfig) => void;
   result: BacktestResult | null;
   running: boolean;
-  barCount: number;
+  /** Error from the last run (validation / not enough data) */
+  runError: string | null;
+  /** Warm-up bars this strategy needs, and the evaluation window (undefined = whole dataset) */
+  warmup: number;
+  evalBars?: number;
   onShowResults: () => void;
 }
 
@@ -37,6 +45,9 @@ export const MODE_OPTIONS = [
   { value: "short" as TradeMode, label: <><TrendDown size={15} weight="bold" />ขาลง</>, activeClass: "bg-red-500 text-white" },
   { value: "both" as TradeMode, label: <><ArrowsDownUp size={15} weight="bold" />ทั้งสองทาง</>, activeClass: "bg-primary text-primary-foreground" },
 ];
+
+const MODE_LABEL: Record<TradeMode, string> = { long: "ขาขึ้นอย่างเดียว (Long)", short: "ขาลงอย่างเดียว (Short)", both: "ทั้งสองทาง (Long + Short)" };
+const FILL_LABEL: Record<FillMode, string> = { close: "ราคาปิดของแท่งสัญญาณ", nextOpen: "ราคาเปิดของแท่งถัดไป" };
 
 const MODE_HELP: Record<TradeMode, string> = {
   long: "เปิด Long เมื่อมีสัญญาณขาขึ้น · ปิดเมื่อมีสัญญาณขาลง",
@@ -86,10 +97,33 @@ function ParamField({ pd, value, onChange }: { pd: ParamDef; value: number; onCh
   const dec = decimals(pd.step);
   const clamp = (v: number) => Math.min(pd.max, Math.max(pd.min, +v.toFixed(dec)));
   const changed = value !== pd.default;
+  if (pd.toggle) {
+    const on = value >= 0.5;
+    return (
+      <label className={cn("flex items-start gap-3 border px-3 py-2.5", on && "border-primary/50 bg-muted/40", pd.locked ? "opacity-80" : "cursor-pointer")}>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          disabled={pd.locked}
+          onClick={() => onChange(on ? 0 : 1)}
+          className={cn("relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors", on ? "bg-primary" : "bg-muted-foreground/30")}
+        >
+          <span className={cn("absolute top-0.5 size-4 rounded-full bg-background shadow transition-all", on ? "left-[18px]" : "left-0.5")} />
+        </button>
+        <span className="min-w-0">
+          <span className="flex items-center gap-1 text-[11px] font-medium">{pd.label}{pd.locked && <LockSimple size={11} className="text-muted-foreground" />}</span>
+          {pd.hint && <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">{pd.hint}</span>}
+        </span>
+      </label>
+    );
+  }
+  // Very wide ranges (e.g. bar counts up to millions) get a plain input — a slider would be useless
+  const sliderOk = (pd.max - pd.min) / pd.step <= 5000;
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-2">
-        <label className="text-[11px] font-medium">
+        <label className="min-w-0 text-[11px] font-medium">
           {pd.label}
           {changed && <span className="ml-1.5 text-[9px] text-amber-500">ค่าเริ่มต้น {pd.default}</span>}
         </label>
@@ -101,16 +135,18 @@ function ParamField({ pd, value, onChange }: { pd: ParamDef; value: number; onCh
           <NumInput value={value} onChange={onChange} min={pd.min} max={pd.max} step={pd.step} className="h-9 w-16" ariaLabel={pd.label} />
           <button type="button" aria-label="เพิ่ม" onClick={() => onChange(clamp(value + pd.step))} className="grid size-9 place-items-center border border-l-0 hover:bg-muted"><Plus size={12} /></button>
         </div>
-        <input
-          type="range"
-          min={pd.min}
-          max={pd.max}
-          step={pd.step}
-          value={value}
-          onChange={(e) => onChange(clamp(parseFloat(e.target.value)))}
-          className="h-9 min-w-0 flex-1 accent-primary"
-          aria-label={pd.label}
-        />
+        {sliderOk && (
+          <input
+            type="range"
+            min={pd.min}
+            max={pd.max}
+            step={pd.step}
+            value={value}
+            onChange={(e) => onChange(clamp(parseFloat(e.target.value)))}
+            className="h-9 min-w-0 flex-1 accent-primary"
+            aria-label={pd.label}
+          />
+        )}
       </div>
     </div>
   );
@@ -143,10 +179,14 @@ function StopField({ label, rule, onChange, tone }: { label: string; rule: StopR
 }
 
 export function StrategyPanel(props: Props) {
-  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, barCount, onShowResults } = props;
-  const tooFew = barCount > 0 && barCount < Math.max(50, def.minBars);
-  const paramsChanged = def.params.some((p) => params[p.key] !== p.default);
+  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults } = props;
+  const paramsChanged = def.params.some((p) => !p.locked && params[p.key] !== p.default);
   const noExit = !config.exitOnOpposite && config.stopLoss.kind === "none" && config.takeProfit.kind === "none" && config.trailing.kind === "none";
+  const engine = engineOf(def, params);
+  const exposure = engine.kind === "exposure";
+  const source = sourceOf(def);
+  const defaultFill: FillMode = def.defaultFill ?? "close";
+  const visibleParams = def.params.filter((pd) => !pd.visibleWhen || (params[pd.visibleWhen.key] ?? 0) === pd.visibleWhen.value);
 
   return (
     <div className="space-y-5 p-4">
@@ -160,24 +200,58 @@ export function StrategyPanel(props: Props) {
         >
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
+              <SourceBadge source={source} />
               <span className="truncate text-sm font-semibold">{def.name}</span>
               <span className="shrink-0 border px-1.5 text-[9px] text-muted-foreground">{CATEGORY_LABELS[def.category]}</span>
             </div>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">แตะเพื่อเปลี่ยน indicator</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">{SOURCE_LABELS[source]} · แตะเพื่อเปลี่ยน indicator</p>
           </div>
           <CaretRight size={16} className="shrink-0 text-muted-foreground" />
         </button>
         <div className="grid gap-1 text-[11px] leading-snug">
-          <p className="flex gap-1.5"><TrendUp size={14} className="mt-px shrink-0 text-emerald-500" /><span><b className="text-emerald-500">ขาขึ้น:</b> {def.longRule}</span></p>
-          <p className="flex gap-1.5"><TrendDown size={14} className="mt-px shrink-0 text-red-500" /><span><b className="text-red-500">ขาลง:</b> {def.shortRule}</span></p>
+          {def.longRule && <p className="flex gap-1.5"><TrendUp size={14} className="mt-px shrink-0 text-emerald-500" /><span><b className="text-emerald-500">ขาขึ้น:</b> {def.longRule}</span></p>}
+          {def.shortRule && <p className="flex gap-1.5"><TrendDown size={14} className="mt-px shrink-0 text-red-500" /><span><b className="text-red-500">ขาลง:</b> {def.shortRule}</span></p>}
+          {def.description && <p className="text-muted-foreground">{def.description}</p>}
         </div>
+        <p className="flex gap-1.5 text-[10px] text-muted-foreground">
+          <Info size={12} className="mt-px shrink-0" />
+          อุ่นเครื่อง {warmup.toLocaleString()} แท่ง · {evalBars ? `ประเมิน ${evalBars.toLocaleString()} แท่งล่าสุด` : "ประเมินทุกแท่งหลังอุ่นเครื่อง"}
+        </p>
       </section>
 
       {/* 2. Direction */}
       <section className="space-y-2">
         <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">2 · ทิศทางการเทรด</h3>
-        <Segmented<TradeMode> size="lg" value={config.mode} onChange={(mode) => onConfig({ ...config, mode })} options={MODE_OPTIONS} aria-label="ทิศทางการเทรด" />
-        <p className="text-[10px] text-muted-foreground">{MODE_HELP[config.mode]}</p>
+        {exposure ? (
+          <div className="flex items-start gap-2 border px-3 py-2.5 text-[11px]">
+            <LockSimple size={14} className="mt-px shrink-0 text-muted-foreground" />
+            <span>
+              <b>{MODE_LABEL[engine.direction]}</b>
+              <span className="block text-[10px] text-muted-foreground">กลยุทธ์นี้กำหนดทิศทางและจังหวะเข้า-ออกเอง (ตามต้นฉบับ) · เข้า-ออกที่{FILL_LABEL.nextOpen}</span>
+            </span>
+          </div>
+        ) : (
+          <>
+            <Segmented<TradeMode> size="lg" value={config.mode} onChange={(mode) => onConfig({ ...config, mode })} options={MODE_OPTIONS} aria-label="ทิศทางการเทรด" />
+            <p className="text-[10px] text-muted-foreground">{MODE_HELP[config.mode]}</p>
+            <div className="space-y-1 pt-1">
+              <span className="text-[11px] font-medium">ราคาที่ใช้เข้า-ออก</span>
+              <Segmented<BacktestConfig["fill"]>
+                size="sm"
+                value={config.fill}
+                onChange={(fill) => onConfig({ ...config, fill })}
+                options={[
+                  { value: "auto", label: "อัตโนมัติ" },
+                  { value: "close", label: "ปิดแท่ง" },
+                  { value: "nextOpen", label: "เปิดแท่งถัดไป" },
+                ]}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                {config.fill === "auto" ? `ค่าของ indicator นี้: ${FILL_LABEL[defaultFill]}` : FILL_LABEL[config.fill]}
+              </p>
+            </div>
+          </>
+        )}
       </section>
 
       {/* 3. Params */}
@@ -191,7 +265,7 @@ export function StrategyPanel(props: Props) {
               </button>
             )}
           </div>
-          {def.params.map((pd) => (
+          {visibleParams.map((pd) => (
             <ParamField key={pd.key} pd={pd} value={params[pd.key]} onChange={(v) => onParam(pd.key, v)} />
           ))}
         </section>
@@ -200,15 +274,24 @@ export function StrategyPanel(props: Props) {
       {/* 4. Risk */}
       <section className="space-y-3">
         <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">4 · จุดตัดขาดทุน / ทำกำไร</h3>
-        <StopField label="Stop Loss" tone="text-red-500" rule={config.stopLoss} onChange={(stopLoss) => onConfig({ ...config, stopLoss })} />
-        <StopField label="Take Profit" tone="text-emerald-500" rule={config.takeProfit} onChange={(takeProfit) => onConfig({ ...config, takeProfit })} />
-        <StopField label="Trailing Stop" tone="text-amber-500" rule={config.trailing} onChange={(trailing) => onConfig({ ...config, trailing })} />
-        <label className="flex cursor-pointer items-center gap-2 text-[11px]">
-          <input type="checkbox" className="size-4 accent-primary" checked={config.exitOnOpposite} onChange={(e) => onConfig({ ...config, exitOnOpposite: e.target.checked })} />
-          ปิดสถานะเมื่อเกิดสัญญาณฝั่งตรงข้าม
-        </label>
-        {noExit && (
-          <p className="flex gap-1.5 text-[10px] text-amber-500"><Warning size={13} className="shrink-0" />ไม่มีเงื่อนไขปิดสถานะ — จะถือจนจบข้อมูล</p>
+        {exposure ? (
+          <p className="flex gap-1.5 border px-3 py-2.5 text-[11px] text-muted-foreground">
+            <LockSimple size={14} className="mt-px shrink-0" />
+            กลยุทธ์นี้ใช้ stop / เป้าหมาย / เงื่อนไขออกของตัวเอง (ปรับได้ในพารามิเตอร์ด้านบน) — SL/TP ของหน้านี้จึงไม่ถูกใช้
+          </p>
+        ) : (
+          <>
+            <StopField label="Stop Loss" tone="text-red-500" rule={config.stopLoss} onChange={(stopLoss) => onConfig({ ...config, stopLoss })} />
+            <StopField label="Take Profit" tone="text-emerald-500" rule={config.takeProfit} onChange={(takeProfit) => onConfig({ ...config, takeProfit })} />
+            <StopField label="Trailing Stop" tone="text-amber-500" rule={config.trailing} onChange={(trailing) => onConfig({ ...config, trailing })} />
+            <label className="flex cursor-pointer items-center gap-2 text-[11px]">
+              <input type="checkbox" className="size-4 accent-primary" checked={config.exitOnOpposite} onChange={(e) => onConfig({ ...config, exitOnOpposite: e.target.checked })} />
+              ปิดสถานะเมื่อเกิดสัญญาณฝั่งตรงข้าม
+            </label>
+            {noExit && (
+              <p className="flex gap-1.5 text-[10px] text-amber-500"><Warning size={13} className="shrink-0" />ไม่มีเงื่อนไขปิดสถานะ — จะถือจนจบข้อมูล</p>
+            )}
+          </>
         )}
         <div className="grid grid-cols-2 gap-3">
           <label className="space-y-1">
@@ -225,8 +308,8 @@ export function StrategyPanel(props: Props) {
       {/* Live result */}
       {/* sits just above the fixed mobile bottom nav (h-16 + safe area) */}
       <section className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur lg:static lg:mx-0 lg:border lg:px-3">
-        {tooFew ? (
-          <p className="flex gap-1.5 text-[11px] text-amber-500"><Warning size={14} className="shrink-0" />ต้องมีอย่างน้อย {Math.max(50, def.minBars)} แท่งเทียน (มี {barCount})</p>
+        {runError ? (
+          <p className="flex gap-1.5 text-[11px] text-amber-500"><Warning size={14} className="shrink-0" />{runError}</p>
         ) : (
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
