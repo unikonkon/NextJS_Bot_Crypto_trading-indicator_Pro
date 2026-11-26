@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import type { Interval } from "@/lib/types/kline";
+import { INTERVAL_MINUTES, INTERVALS, type Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
 import { detectTfMinutes, getIndicator, htfApplies, htfIndicator, htfIndicatorWarmup, htfWarmupBars, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
 import { htfTrend, normalizeHtf } from "@/lib/engine/htf";
@@ -24,12 +24,8 @@ import { DEFAULT_RANK_HTF, RankingPanel, inScope, type RankHtf, type RankRow, ty
 
 type MobileTab = "chart" | "strategy" | "results" | "ranking";
 
-/** Upper bound of bars fetched (evaluation window + warm-up) — 20 Binance requests */
-const MAX_BARS = 20_000;
-const INTERVAL_MINUTES: Record<string, number> = {
-  "1s": 1 / 60, "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240,
-  "6h": 360, "8h": 480, "12h": 720, "1d": 1440, "3d": 4320, "1w": 10080, "1M": 43200,
-};
+/** Upper bound of bars fetched (evaluation window + warm-up) — 50 Binance requests */
+const MAX_BARS = 50_000;
 type SideTab = "strategy" | "ranking";
 
 const NAV: { tab: MobileTab; label: string; icon: typeof ChartLineUp }[] = [
@@ -112,9 +108,14 @@ export default function KlinesPage() {
   useEffect(() => { desiredRef.current = desiredTotal; }, [desiredTotal]);
   const requestedRef = useRef("");
 
+  /** Market switched to match a CSV file being loaded — that change must not refetch from Binance */
+  const csvMarketRef = useRef("");
+
   // Reload when the market changes
   useEffect(() => {
     if (!ready) return;
+    if (csvMarketRef.current === `${symbol}|${interval}`) { csvMarketRef.current = ""; return; }
+    csvMarketRef.current = "";
     const src = sourceRef.current;
     if (src?.kind === "range") { loadRange(symbol, interval, src.start, src.end); return; }
     requestedRef.current = `${symbol}|${interval}|${desiredRef.current}`;
@@ -604,6 +605,9 @@ export default function KlinesPage() {
         barCount={bars.length}
         firstTime={bars.length ? bars.time[0] : null}
         lastTime={bars.length ? bars.time[bars.length - 1] : null}
+        firstPrice={bars.length ? bars.open[0] : null}
+        lastPrice={bars.length ? bars.close[bars.length - 1] : null}
+        maxBars={MAX_BARS}
         loadedAt={data.loadedAt}
         loading={data.loading}
         progress={data.progress}
@@ -616,7 +620,17 @@ export default function KlinesPage() {
         }}
         warmup={neededWarmup}
         onRange={(s, e) => loadRange(symbol, interval, s, e)}
-        onCsv={data.loadCsv}
+        onCsv={(f) => {
+          // Follow the file's pair / timeframe so the top bar, warm-up and filters match the data
+          const sym = f.symbol ?? symbol;
+          const tf = f.interval && (INTERVALS as readonly string[]).includes(f.interval) ? (f.interval as Interval) : interval;
+          if (sym !== symbol || tf !== interval) {
+            csvMarketRef.current = `${sym}|${tf}`;
+            setSymbol(sym);
+            setInterval(tf);
+          }
+          data.loadCsv(f.file);
+        }}
         onCancel={data.cancel}
         onDownload={() => data.downloadCsv(`${symbol}_${interval}`)}
       />

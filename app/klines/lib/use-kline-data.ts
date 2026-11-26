@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseKline, type BinanceKlineRaw, type Interval, type KlineData } from "@/lib/types/kline";
+import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 
 export type DataSource =
   | { kind: "latest"; limit: number }
@@ -77,13 +78,13 @@ export function useKlineData() {
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<DataSource | null>(null);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
-  const [csvFiles, setCsvFiles] = useState<string[]>([]);
+  const [csvFiles, setCsvFiles] = useState<CsvFileInfo[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     fetch("/api/dataShowUI")
       .then((r) => r.json())
-      .then((f: unknown) => setCsvFiles(Array.isArray(f) ? (f as string[]) : []))
+      .then((f: unknown) => setCsvFiles(Array.isArray(f) ? (f as CsvFileInfo[]) : []))
       .catch(() => setCsvFiles([]));
   }, []);
 
