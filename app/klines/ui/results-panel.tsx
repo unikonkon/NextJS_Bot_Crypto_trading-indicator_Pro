@@ -188,12 +188,12 @@ export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, pi
 
   return (
     <div className={cn("space-y-4", running && "opacity-60 transition-opacity")}>
-      {/* Hero */}
-      <div className="border bg-card p-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
+      {/* Hero — below lg it sits right under the chart's summary strip, which already shows the return and the open side */}
+      <div className="border bg-card p-3 lg:p-4">
+        <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
           <div>
             <p className="text-[10px] text-muted-foreground">{def.name} · {MODE_LABEL[r.engine === "exposure" ? r.direction : mode]}</p>
-            <p className={cn("text-3xl font-bold tabular-nums", toneClass(r.totalReturnPct))}>{fmtPct(r.totalReturnPct)}</p>
+            <p className={cn("hidden text-3xl font-bold tabular-nums lg:block", toneClass(r.totalReturnPct))}>{fmtPct(r.totalReturnPct)}</p>
             <p className="text-[11px] text-muted-foreground">
               ซื้อแล้วถือ <span className={toneClass(r.buyAndHoldPct)}>{fmtPct(r.buyAndHoldPct)}</span>
               {" · "}
@@ -202,15 +202,15 @@ export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, pi
           </div>
           <div className="text-right text-[11px]">
             {r.openSide ? (
-              <p className={cn("inline-flex items-center gap-1 px-2 py-1 font-semibold", r.openSide === "long" ? "bg-up text-up-foreground" : "bg-down text-down-foreground")}>
+              <p className={cn("hidden items-center gap-1 px-2 py-1 font-semibold lg:inline-flex", r.openSide === "long" ? "bg-up text-up-foreground" : "bg-down text-down-foreground")}>
                 {r.openSide === "long" ? <TrendUp size={13} weight="bold" /> : <TrendDown size={13} weight="bold" />}
                 ถือ {r.openSide === "long" ? "Long" : "Short"} อยู่
               </p>
             ) : (
-              <p className="inline-block border px-2 py-1 text-muted-foreground">ไม่มีสถานะ</p>
+              <p className="inline-block border px-2 py-0.5 text-muted-foreground lg:py-1">ไม่มีสถานะ</p>
             )}
             {r.lastSignal && (
-              <p className="mt-1 text-[10px] text-muted-foreground">
+              <p className="text-[10px] text-muted-foreground lg:mt-1">
                 สัญญาณล่าสุด <span className={r.lastSignal.dir === 1 ? "text-up" : "text-down"}>{r.lastSignal.dir === 1 ? "▲ ขาขึ้น" : "▼ ขาลง"}</span>{" "}
                 {r.lastSignal.barsAgo === 0 ? "แท่งล่าสุด" : `${r.lastSignal.barsAgo} แท่งก่อน`}
               </p>

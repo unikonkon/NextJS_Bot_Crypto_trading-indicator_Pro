@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { BookmarkSimple, CaretRight, ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
+import { BookmarkSimple, CaretDown, CaretRight, ChartLineUp, Faders, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { INTERVAL_MINUTES, INTERVALS, type Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
@@ -30,7 +30,8 @@ import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import { makePreset, savePreset } from "@/lib/trading/presets";
 import { listSaved, makeSaved, onSavedChange, putSaved, readStartup, setupKey, startupDone, type SavedData } from "@/lib/saved/strategies";
 
-type MobileTab = "chart" | "strategy" | "results" | "ranking";
+/** Mobile bottom navigation — the results sit under the chart in the "chart" tab */
+type MobileTab = "chart" | "strategy" | "ranking";
 
 /** Upper bound of bars fetched (evaluation window + warm-up) — 50 Binance requests */
 const MAX_BARS = 50_000;
@@ -41,7 +42,6 @@ type SideTab = "strategy" | "ranking";
 const NAV: { tab: MobileTab; label: string; icon: typeof ChartLineUp }[] = [
   { tab: "chart", label: "กราฟ", icon: ChartLineUp },
   { tab: "strategy", label: "กลยุทธ์", icon: Faders },
-  { tab: "results", label: "ผลลัพธ์", icon: ListNumbers },
   { tab: "ranking", label: "จัดอันดับ", icon: Ranking },
 ];
 
@@ -79,6 +79,8 @@ export default function KlinesPage() {
   const openData = useCallback((tab?: "latest" | "range" | "csv") => { setDataTab(tab); setDataOpen(true); }, []);
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const resultsRef = useRef<HTMLDivElement>(null);
+  /** Summary strip under the chart — on mobile the results start there */
+  const stripRef = useRef<HTMLButtonElement>(null);
   const chartRef = useRef<HTMLElement>(null);
 
   // ─── Strategy ─────────────────────────────────────────────
@@ -504,8 +506,10 @@ export default function KlinesPage() {
 
   // ─── Navigation helpers ───────────────────────────────────
   const showResults = useCallback(() => {
-    if (isDesktop) resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    else setMobileTab("results");
+    // Mobile: the results are under the chart, in the chart tab — switch to it first, then scroll once it is laid out.
+    // There the summary strip (return, trades, open side) stays in view as the heading of the details.
+    setMobileTab("chart");
+    requestAnimationFrame(() => (isDesktop ? resultsRef : stripRef).current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [isDesktop]);
 
   /** Put a CSV file on the chart, following its pair / timeframe without refetching from Binance */
@@ -738,7 +742,7 @@ export default function KlinesPage() {
               )}
 
               {/* Quick summary strip */}
-              <button type="button" onClick={showResults} disabled={!result} className="flex w-full items-center gap-3 border-t px-3 py-2 text-left hover:bg-muted/40 disabled:hover:bg-transparent">
+              <button ref={stripRef} type="button" onClick={showResults} disabled={!result} className="flex w-full scroll-mt-24 items-center gap-3 border-t px-3 py-2 text-left hover:bg-muted/40 disabled:hover:bg-transparent">
                 <div className="min-w-0 flex-1">
                   <p className="text-[10px] text-muted-foreground">
                     {data.loading ? "กำลังโหลดข้อมูล…" : running ? "กำลังทดสอบ…" : runError ?? "ผลทดสอบย้อนหลัง (ทบต้น)"}
@@ -759,12 +763,13 @@ export default function KlinesPage() {
                     ถือ {result.openSide === "long" ? "LONG" : "SHORT"}
                   </span>
                 )}
-                <span className="shrink-0 text-[10px] text-muted-foreground lg:hidden">ดูผล ›</span>
+                <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground lg:hidden">รายละเอียด <CaretDown size={11} /></span>
               </button>
             </div>
           </section>
 
-          <section ref={resultsRef} className={cn(leftVis("results"), "scroll-mt-16 px-3 py-3 lg:p-0")}>
+          {/* Mobile: directly under the chart (same tab); the sticky header there is two rows tall */}
+          <section ref={resultsRef} className={cn(leftVis("chart"), "scroll-mt-16 px-3 pb-4 lg:p-0")}>
             <ResultsPanel result={result} def={def} mode={config.mode} bars={bars} running={running} onPickTrade={pickTrade} picked={focusNow?.trade ?? null} />
           </section>
         </div>
@@ -880,7 +885,7 @@ export default function KlinesPage() {
       </main>
 
       {/* ═══ Mobile bottom navigation ═══ */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
         {NAV.map(({ tab, label, icon: Icon }) => {
           const active = mobileTab === tab;
           return (
