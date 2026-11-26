@@ -5,7 +5,8 @@ import { CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Mi
 import { Segmented } from "@/components/ui/segmented";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { engineOf, sourceOf } from "@/lib/engine/registry";
+import { engineOf, getIndicator, normalizeParams, sourceOf } from "@/lib/engine/registry";
+import { HTF_CHOICES, htfBest, normalizeHtf } from "@/lib/engine/htf";
 import { SourceBadge } from "./indicator-picker";
 import {
   CATEGORY_LABELS,
@@ -187,9 +188,24 @@ export interface HtfStatus {
   since: number | null;
 }
 
-function HtfSection({ f, onChange, status }: { f: HtfFilter; onChange: (f: HtfFilter) => void; status: HtfStatus }) {
-  const label = HTF_LABELS[f.interval];
+const BEST_GROUPS: { tf: HtfInterval; ids: string[] }[] = (["1w", "3d", "1d"] as HtfInterval[]).map((tf) => ({
+  tf,
+  ids: HTF_CHOICES.filter((c) => c.best === tf).map((c) => c.id),
+}));
+
+function HtfSection({ f: raw, onChange, status }: { f: HtfFilter; onChange: (f: HtfFilter) => void; status: HtfStatus }) {
+  const f = normalizeHtf(raw);
+  const def = getIndicator(f.indicator)!;
+  const params = normalizeParams(def, f.params[f.indicator]);
+  const best = htfBest(f.indicator);
+  const tfLabel = HTF_LABELS[f.interval];
   const on = f.enabled;
+  const invalid = def.validate?.(params) ?? null;
+  const changedParams = def.params.some((pd) => params[pd.key] !== pd.default);
+  const set = (patch: Partial<HtfFilter>) => onChange({ ...f, ...patch });
+  const pick = (id: string) => set({ indicator: id, interval: htfBest(id) });
+  const setParam = (key: string, v: number) => set({ params: { ...f.params, [f.indicator]: { ...params, [key]: v } } });
+
   return (
     <div className={cn("space-y-3 border px-3 py-3", on && "border-primary/50 bg-muted/30")}>
       <label className="flex cursor-pointer items-start gap-3">
@@ -197,63 +213,124 @@ function HtfSection({ f, onChange, status }: { f: HtfFilter; onChange: (f: HtfFi
           type="button"
           role="switch"
           aria-checked={on}
-          onClick={() => onChange({ ...f, enabled: !on })}
+          onClick={() => set({ enabled: !on })}
           className={cn("relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors", on ? "bg-primary" : "bg-muted-foreground/30")}
         >
           <span className={cn("absolute top-0.5 size-4 rounded-full bg-background shadow transition-all", on ? "left-[18px]" : "left-0.5")} />
         </button>
         <span className="min-w-0">
-          <span className="block text-[11px] font-medium">เทรดตามทิศ EMA Cross ของ timeframe ใหญ่</span>
+          <span className="block text-[11px] font-medium">เทรดตามทิศของ timeframe ใหญ่</span>
           <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
-            EMA เร็ว &gt; ช้า บน {label} → เปิดได้เฉพาะ Long · EMA เร็ว &lt; ช้า → เปิดได้เฉพาะ Short ·
-            สัญญาณที่สวนทางยังใช้ปิดไม้ได้ แต่ไม่เปิดไม้ใหม่ · ไม้ที่ถืออยู่ไม่ถูกบังคับปิดเมื่อ {label} พลิก
+            {on
+              ? `ใช้ ${def.name} บน ${tfLabel} บอกทิศ · หลังสัญญาณซื้อเปิดได้เฉพาะ Long · หลังสัญญาณขายเปิดได้เฉพาะ Short`
+              : "เปิดไม้ได้เฉพาะฝั่งเดียวกับ indicator ที่รันบน timeframe ใหญ่ (เช่น CCI บน 3D)"}
           </span>
         </span>
       </label>
 
       {on && (
         <>
-          <Segmented<HtfInterval>
-            size="sm"
-            value={f.interval}
-            onChange={(interval) => onChange({ ...f, interval })}
-            options={(Object.keys(HTF_LABELS) as HtfInterval[]).map((v) => ({ value: v, label: HTF_LABELS[v] }))}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <label className="space-y-1">
-              <span className="text-[11px] font-medium">EMA เร็ว</span>
-              <NumInput value={f.fast} onChange={(fast) => onChange({ ...f, fast })} min={1} max={200} step={1} className="h-9 w-full px-2 text-left" ariaLabel="EMA เร็ว" />
-            </label>
-            <label className="space-y-1">
-              <span className="text-[11px] font-medium">EMA ช้า</span>
-              <NumInput value={f.slow} onChange={(slow) => onChange({ ...f, slow })} min={2} max={400} step={1} className="h-9 w-full px-2 text-left" ariaLabel="EMA ช้า" />
-            </label>
+          {/* 1) which indicator — grouped by the timeframe where it made the most profit */}
+          <div className="space-y-2">
+            <span className="text-[11px] font-medium">ใช้อะไรบอกทิศ</span>
+            {BEST_GROUPS.map((g) => (
+              <div key={g.tf} className="space-y-1">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">กำไรมากสุดบน {HTF_LABELS[g.tf]}</p>
+                {g.ids.map((id) => {
+                  const d = getIndicator(id);
+                  if (!d) return null;
+                  const sel = id === f.indicator;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => pick(id)}
+                      aria-pressed={sel}
+                      className={cn(
+                        "flex h-9 w-full items-center gap-2 border px-2.5 text-left text-[11px] transition-colors",
+                        sel ? "border-primary bg-primary/10 font-medium" : "hover:bg-muted/60",
+                      )}
+                    >
+                      <span className={cn("grid size-3.5 shrink-0 place-items-center rounded-full border", sel ? "border-primary" : "border-muted-foreground/40")}>
+                        {sel && <span className="size-1.5 rounded-full bg-primary" />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                      <span className="shrink-0 border px-1 text-[9px] tabular-nums text-muted-foreground">{HTF_LABELS[g.tf]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
-          {f.fast >= f.slow && (
-            <p className="flex gap-1.5 text-[10px] text-amber-500"><Warning size={13} className="shrink-0" />EMA เร็วควรสั้นกว่า EMA ช้า</p>
-          )}
-          {!status.applies ? (
-            <p className="text-[10px] text-amber-500">ใช้ได้เมื่อกราฟเป็น timeframe ต่ำกว่า {label} (ตอนนี้ {status.chartTf}) — ตอนนี้ตัวกรองไม่มีผล</p>
-          ) : status.error ? (
-            <p className="text-[10px] text-red-500">โหลดข้อมูล {label} ไม่สำเร็จ: {status.error}</p>
-          ) : status.loading || status.state === null ? (
-            <p className="animate-pulse text-[10px] text-muted-foreground">กำลังโหลดข้อมูล {label}…</p>
-          ) : (
-            <p className="flex items-center gap-1.5 text-[11px]">
-              <span className="text-muted-foreground">{label} ตอนนี้:</span>
-              {status.state === 1 ? (
-                <b className="inline-flex items-center gap-1 text-emerald-500"><TrendUp size={13} weight="bold" /> ขาขึ้น · เปิดได้เฉพาะ Long</b>
-              ) : status.state === -1 ? (
-                <b className="inline-flex items-center gap-1 text-red-500"><TrendDown size={13} weight="bold" /> ขาลง · เปิดได้เฉพาะ Short</b>
-              ) : (
-                <b className="text-muted-foreground">ยังไม่ทราบ (ข้อมูลไม่พอ) · ไม่เปิดไม้</b>
-              )}
-              {status.since !== null && status.state !== 0 && <span className="text-[10px] text-muted-foreground">ตั้งแต่ {fmtDate(status.since, true)}</span>}
+
+          {/* 2) timeframe — preset to the best one when the indicator is picked */}
+          <div className="space-y-1">
+            <span className="text-[11px] font-medium">Timeframe ที่ใช้คิด</span>
+            <Segmented<HtfInterval>
+              size="sm"
+              value={f.interval}
+              onChange={(interval) => set({ interval })}
+              options={(Object.keys(HTF_LABELS) as HtfInterval[]).map((v) => ({ value: v, label: v === best ? `${HTF_LABELS[v]} ★` : HTF_LABELS[v] }))}
+            />
+            {f.interval !== best ? (
+              <p className="flex flex-wrap items-center gap-x-2 text-[10px] text-amber-500">
+                ค่าที่ทำกำไรมากสุดของ {def.name} คือ {HTF_LABELS[best]}
+                <button type="button" onClick={() => set({ interval: best })} className="underline underline-offset-2">ใช้ {HTF_LABELS[best]}</button>
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">★ = timeframe ที่ {def.name} ทำกำไรมากสุด</p>
+            )}
+          </div>
+
+          {/* 3) current state */}
+          <div className="border bg-background px-2.5 py-2">
+            {!status.applies ? (
+              <p className="text-[10px] text-amber-500">ใช้ได้เมื่อกราฟเป็น timeframe ต่ำกว่า {tfLabel} (ตอนนี้ {status.chartTf}) — ตอนนี้ตัวกรองไม่มีผล</p>
+            ) : status.error ? (
+              <p className="text-[10px] text-red-500">โหลดข้อมูล {tfLabel} ไม่สำเร็จ: {status.error}</p>
+            ) : status.loading || status.state === null ? (
+              <p className="animate-pulse text-[10px] text-muted-foreground">กำลังโหลดข้อมูล {tfLabel}…</p>
+            ) : (
+              <p className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
+                <span className="text-muted-foreground">{tfLabel} ตอนนี้:</span>
+                {status.state === 1 ? (
+                  <b className="inline-flex items-center gap-1 text-emerald-500"><TrendUp size={13} weight="bold" /> ขาขึ้น · เปิดได้เฉพาะ Long</b>
+                ) : status.state === -1 ? (
+                  <b className="inline-flex items-center gap-1 text-red-500"><TrendDown size={13} weight="bold" /> ขาลง · เปิดได้เฉพาะ Short</b>
+                ) : (
+                  <b className="text-muted-foreground">ยังไม่มีสัญญาณ · ไม่เปิดไม้</b>
+                )}
+                {status.since !== null && status.state !== 0 && <span className="text-[10px] text-muted-foreground">ตั้งแต่ {fmtDate(status.since, true)}</span>}
+              </p>
+            )}
+            <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+              {def.longRule && <>ขาขึ้นหลัง: {def.longRule}<br /></>}
+              {def.shortRule && <>ขาลงหลัง: {def.shortRule}</>}
             </p>
-          )}
-          <p className="text-[10px] leading-snug text-muted-foreground">
-            ใช้เฉพาะแท่ง {label} ที่ปิดแล้ว (แท่งที่ยังไม่ปิดไม่ถูกใช้ ป้องกันการเห็นอนาคต) · บนกราฟ: แถบหนาโปร่งแสง = EMA เร็วของ TF ใหญ่ (เขียว = ช่วง Long, แดง = ช่วง Short) · เส้นประ = EMA ช้า
-          </p>
+          </div>
+          {invalid && <p className="flex gap-1.5 text-[10px] text-amber-500"><Warning size={13} className="shrink-0" />{invalid}</p>}
+
+          {/* 4) indicator settings, folded away */}
+          <details className="group border-t pt-2">
+            <summary className="flex cursor-pointer list-none items-center justify-between text-[11px] font-medium">
+              <span>ตั้งค่าเพิ่ม · {def.name}{changedParams && <span className="ml-1.5 text-[9px] text-amber-500">ปรับแล้ว</span>}</span>
+              <CaretRight size={12} className="transition-transform group-open:rotate-90" />
+            </summary>
+            <div className="mt-3 space-y-3">
+              {def.params.map((pd) => (
+                <ParamField key={pd.key} pd={pd} value={params[pd.key]} onChange={(v) => setParam(pd.key, v)} />
+              ))}
+              {changedParams && (
+                <button type="button" onClick={() => set({ params: { ...f.params, [f.indicator]: {} } })} className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">
+                  <ArrowCounterClockwise size={12} /> คืนค่ามาตรฐานของ {def.name}
+                </button>
+              )}
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                ใช้เฉพาะแท่ง {tfLabel} ที่ปิดแล้ว (ไม่เห็นอนาคต) · สัญญาณที่สวนทางยังใช้ปิดไม้ได้ · ไม้ที่ถืออยู่ไม่ถูกบังคับปิดเมื่อ {tfLabel} พลิก ·
+                บนกราฟ: แถบใต้ราคา = ทิศที่อนุญาต (เขียว Long / แดง Short) · เส้นประ = เส้นของ {def.name} บน {tfLabel}
+              </p>
+            </div>
+          </details>
         </>
       )}
     </div>

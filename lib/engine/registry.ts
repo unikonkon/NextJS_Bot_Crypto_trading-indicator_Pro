@@ -1,5 +1,5 @@
 import { INDICATORS } from "./indicators";
-import { htfTrend, type HtfTrend } from "./htf";
+import { htfTrend, normalizeHtf, type HtfTrend } from "./htf";
 import { HTF_LABELS, HTF_MINUTES, type Bars, type Category, type ComputeContext, type HtfFilter, type HtfInterval, type IndicatorDef, type Params, type Source } from "./types";
 
 const BY_ID = new Map<string, IndicatorDef>();
@@ -86,7 +86,20 @@ export function planRun(def: IndicatorDef, p: Params, bars: Bars, evalBars?: num
 
 /** The filter is on and the chart timeframe is lower than the filter's timeframe */
 export function htfApplies(f: HtfFilter | undefined, tfMinutes: number): f is HtfFilter {
-  return !!f?.enabled && tfMinutes > 0 && tfMinutes < HTF_MINUTES[f.interval];
+  return !!f?.enabled && tfMinutes > 0 && tfMinutes < (HTF_MINUTES[f.interval] ?? 0);
+}
+
+/** Indicator + params the higher-timeframe filter runs (stored params normalized to the indicator) */
+export function htfIndicator(f: HtfFilter) {
+  const h = normalizeHtf(f);
+  const def = getIndicator(h.indicator)!;
+  return { def, params: normalizeParams(def, h.params[h.indicator]), filter: h };
+}
+
+/** Higher-timeframe warm-up, in higher-timeframe bars, to fetch before the chart's first bar */
+export function htfWarmupBars(f: HtfFilter): number {
+  const { def, params, filter } = htfIndicator(f);
+  return Math.max(60, 3 * warmupOf(def, params, HTF_MINUTES[filter.interval]) + 10);
 }
 
 /**
@@ -118,8 +131,11 @@ export class ComputeCache {
     if (!this.htf || this.htf.interval !== f!.interval || this.htf.bars.length === 0) {
       throw new Error(`กำลังโหลดข้อมูล ${HTF_LABELS[f!.interval]} สำหรับตัวกรองเทรนด์…`);
     }
-    const key = `${f!.interval}|${f!.fast}|${f!.slow}|${tfMinutes}`;
-    if (this.trend?.key !== key) this.trend = { key, value: htfTrend(this.bars, this.htf.bars, f!, tfMinutes) };
+    const { def, params, filter } = htfIndicator(f!);
+    const key = `${paramsKey(def.id, params)}|${filter.interval}|${tfMinutes}`;
+    if (this.trend?.key !== key) {
+      this.trend = { key, value: htfTrend(this.bars, this.htf.bars, def, params, filter.interval, tfMinutes) };
+    }
     return this.trend.value;
   }
 

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { TrendUp, TrendDown, CaretLeft, CaretRight, CaretDown } from "@phosphor-icons/react";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
+import { getIndicator } from "@/lib/engine/registry";
 import { HTF_LABELS, type BacktestResult, type Bars, type IndicatorDef, type SideStats, type Trade, type TradeMode } from "@/lib/engine/types";
 import { EquityChart } from "./equity-chart";
 import { KlineTable } from "./kline-table";
@@ -215,7 +216,7 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
         </p>
         {r.htf && (
           <p className="mt-1 text-[10px] text-muted-foreground">
-            ตัวกรอง EMA {r.htf.fast}/{r.htf.slow} {HTF_LABELS[r.htf.interval]}: ไม่เข้า <b className="text-foreground">{r.htf.blocked.toLocaleString()}</b> สัญญาณที่สวนเทรนด์ใหญ่
+            ตัวกรอง {getIndicator(r.htf.indicator)?.name ?? r.htf.indicator} {HTF_LABELS[r.htf.interval]}: ไม่เข้า <b className="text-foreground">{r.htf.blocked.toLocaleString()}</b> สัญญาณที่สวนเทรนด์ใหญ่
             {" · "}ขาขึ้น {Math.round((r.htf.bullBars / Math.max(1, evalCount)) * 100)}% / ขาลง {Math.round((r.htf.bearBars / Math.max(1, evalCount)) * 100)}% ของช่วงประเมิน
             {r.htf.unknownBars > 0 && ` · ไม่มีข้อมูล ${HTF_LABELS[r.htf.interval]} ${r.htf.unknownBars.toLocaleString()} แท่ง (ไม่เปิดไม้)`}
           </p>

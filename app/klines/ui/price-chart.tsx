@@ -19,7 +19,7 @@ import {
   type MouseEventParams,
 } from "lightweight-charts";
 import { ComputeCache, planRun } from "@/lib/engine/registry";
-import type { Bars, IndicatorDef, Params, PlotOutput, SeriesPlot, Trade } from "@/lib/engine/types";
+import type { Bars, IndicatorDef, PanePlot, Params, PlotOutput, SeriesPlot, Trade } from "@/lib/engine/types";
 import { fmtPrice } from "../lib/format";
 
 export interface ChartIndicator {
@@ -37,8 +37,10 @@ interface Props {
   compact: boolean;
   /** Same evaluation window as the backtest, so stateful strategies plot identically */
   evalBars?: number;
-  /** Extra price-pane lines (e.g. the higher-timeframe EMAs of the trend filter) */
+  /** Extra price-pane lines (e.g. the higher-timeframe filter's lines) */
   extraOverlays?: SeriesPlot[];
+  /** Extra thin panes under the price (e.g. the higher-timeframe direction strip) */
+  extraPanes?: PanePlot[];
 }
 
 const UP = "#10b981";
@@ -106,7 +108,7 @@ function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number) {
     `<b style="color:${tone}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</b>`;
 }
 
-export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays }: Props) {
+export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays, extraPanes }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -141,7 +143,8 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
   }, [cache, indicators, bars, dark, evalBars]);
 
   const paneCount = plots.reduce((n, p) => n + (p.plot.panes?.length ?? 0), 0);
-  const height = (compact ? 320 : 460) + paneCount * (compact ? 110 : 140);
+  const stripCount = extraPanes?.length ?? 0;
+  const height = (compact ? 320 : 460) + paneCount * (compact ? 110 : 140) + stripCount * 44;
 
   // ─── Create chart once ────────────────────────────────────
   useEffect(() => {
@@ -255,9 +258,14 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
         });
       }
     }
+    const firstStrip = paneIdx;
+    for (const pane of extraPanes ?? []) {
+      const idx = paneIdx++;
+      for (const s of pane.series) add(s, idx, false);
+    }
     const panes = chart.panes();
     panes[0]?.setStretchFactor(compact ? 2.4 : 3.2);
-    for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
+    for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(i >= firstStrip ? 0.25 : 1);
 
     if (fittedBarsRef.current !== bars && bars.length > 0) {
       fittedBarsRef.current = bars;
@@ -265,7 +273,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
       const n = bars.length;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - (compact ? 120 : 220)), to: n + 3 });
     }
-  }, [bars, plots, compact, extraOverlays]);
+  }, [bars, plots, compact, extraOverlays, extraPanes]);
 
   // ─── Markers: trades (Long ▲ / Short ▼ / exits ●) or indicator markers ─
   useEffect(() => {

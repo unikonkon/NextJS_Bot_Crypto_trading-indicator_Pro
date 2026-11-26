@@ -346,7 +346,7 @@ function htfReport(opts: RunOptions, start: number, n: number, blocked: number):
     else if (r[i] === -1) bearBars++;
     else unknownBars++;
   }
-  return { interval: f.interval, fast: f.fast, slow: f.slow, blocked, bullBars, bearBars, unknownBars };
+  return { interval: f.interval, indicator: f.indicator, blocked, bullBars, bearBars, unknownBars };
 }
 
 function sideStats(trades: Trade[]): SideStats {

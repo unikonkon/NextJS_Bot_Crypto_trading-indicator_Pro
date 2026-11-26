@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { KlineData } from "@/lib/types/kline";
-import { HTF_MINUTES, type HtfFilter, type HtfInterval } from "@/lib/engine/types";
+import { HTF_MINUTES, type HtfInterval } from "@/lib/engine/types";
 import { fetchKlinesRange } from "./use-kline-data";
 
 interface Loaded {
@@ -21,26 +21,26 @@ interface Loaded {
 export function useHtfData(p: {
   active: boolean;
   symbol: string;
-  filter: HtfFilter;
+  interval: HtfInterval;
+  /** Higher-timeframe bars needed before the first chart bar for the filter indicator to settle */
+  warmBars: number;
   firstTime: number | null;
   lastTime: number | null;
   ltfMinutes: number;
 }) {
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState<{ key: string; error: string } | null>(null);
-  const { active, symbol, firstTime, lastTime, ltfMinutes } = p;
-  const { interval, slow } = p.filter;
+  const { active, symbol, interval, warmBars, firstTime, lastTime, ltfMinutes } = p;
 
   // What must be covered now — null when nothing needs fetching
   const need = useMemo(() => {
     if (!active || firstTime === null || lastTime === null) return null;
     const htfMs = HTF_MINUTES[interval] * 60_000;
-    const warm = 3 * Math.max(2, Math.round(slow)) + 10;
-    const from = Math.floor((firstTime - warm * htfMs) / htfMs) * htfMs;
+    const from = Math.floor((firstTime - warmBars * htfMs) / htfMs) * htfMs;
     const end = lastTime + ltfMinutes * 60_000;
     if (data && data.symbol === symbol && data.interval === interval && data.from <= from && data.to >= end) return null;
     return { key: `${symbol}|${interval}|${from}|${end}`, symbol, interval, from, end, htfMs };
-  }, [active, symbol, interval, slow, firstTime, lastTime, ltfMinutes, data]);
+  }, [active, symbol, interval, warmBars, firstTime, lastTime, ltfMinutes, data]);
 
   useEffect(() => {
     if (!need || failed?.key === need.key) return;

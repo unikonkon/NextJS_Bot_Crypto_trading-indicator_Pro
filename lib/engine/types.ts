@@ -214,21 +214,27 @@ export interface StopRule {
 }
 
 /** Higher timeframe used as a trend filter */
-export type HtfInterval = "4h" | "1d" | "1w";
-export const HTF_MINUTES: Record<HtfInterval, number> = { "4h": 240, "1d": 1440, "1w": 10080 };
-export const HTF_LABELS: Record<HtfInterval, string> = { "4h": "4H", "1d": "1D", "1w": "1W" };
+export type HtfInterval = "4h" | "1d" | "3d" | "1w";
+export const HTF_MINUTES: Record<HtfInterval, number> = { "4h": 240, "1d": 1440, "3d": 4320, "1w": 10080 };
+export const HTF_LABELS: Record<HtfInterval, string> = { "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
 
 /**
- * Multi-timeframe trend filter: EMA fast/slow on the higher timeframe decides the side.
- * While fast > slow only Long entries are taken, while fast < slow only Short entries.
- * Signals against it can still close a position; a position is never forced out when the
- * higher timeframe flips. Only *closed* higher-timeframe bars are used (no lookahead).
+ * Multi-timeframe trend filter: one indicator run on the higher timeframe decides the side.
+ * After its Buy signal only Long entries are taken, after its Sell signal only Short entries
+ * (the state between signals, like trading that indicator). Signals against it can still close
+ * a position; a position is never forced out when the higher timeframe flips.
+ * Only *closed* higher-timeframe bars are used (no lookahead).
  */
 export interface HtfFilter {
   enabled: boolean;
   interval: HtfInterval;
-  fast: number;
-  slow: number;
+  /** Indicator id whose signals define the direction (see HTF_CHOICES) */
+  indicator: string;
+  /** Params per indicator id — missing keys use the indicator's defaults */
+  params: Record<string, Params>;
+  /** @deprecated EMA Cross lengths from the first version — read once into params.ema_cross */
+  fast?: number;
+  slow?: number;
 }
 
 export interface BacktestConfig {
@@ -257,7 +263,7 @@ export const DEFAULT_CONFIG: BacktestConfig = {
   takeProfit: { kind: "none", value: 4 },
   trailing: { kind: "none", value: 2 },
   exitOnOpposite: true,
-  htf: { enabled: false, interval: "1d", fast: 9, slow: 21 },
+  htf: { enabled: false, interval: "1d", indicator: "ema_cross", params: {} },
 };
 
 export type Side = "long" | "short";
@@ -332,8 +338,8 @@ export interface RunInfo {
 
 export interface HtfReport {
   interval: HtfInterval;
-  fast: number;
-  slow: number;
+  /** Indicator id used as the filter */
+  indicator: string;
   /** Entries skipped because they went against the higher timeframe */
   blocked: number;
   /** Evaluated bars by higher-timeframe state */

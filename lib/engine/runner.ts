@@ -1,4 +1,5 @@
 import { runBacktest, runExposure, toSummary } from "./backtest";
+import { normalizeHtf } from "./htf";
 import { ComputeCache, engineOf, getIndicator, normalizeParams, planRun } from "./registry";
 import type { BacktestConfig, BacktestResult, BacktestSummary, FillMode, Params } from "./types";
 
@@ -29,7 +30,7 @@ export function runJob(cache: ComputeCache, job: RunJob): JobOutput {
   }
 
   const trend = cache.htfTrend(job.config.htf, ctx.tfMinutes);
-  const filter = trend ? { regime: trend.regime, htf: job.config.htf } : {};
+  const filter = trend ? { regime: trend.regime, htf: normalizeHtf(job.config.htf) } : {};
   const r = cache.compute(def, params, ctx);
   const reasons = def.reasons?.(r, params) ?? null;
   const engine = engineOf(def, params);

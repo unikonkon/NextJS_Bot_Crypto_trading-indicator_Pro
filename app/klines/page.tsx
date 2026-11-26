@@ -5,10 +5,10 @@ import { ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown,
 import { cn } from "@/lib/utils";
 import type { Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
-import { detectTfMinutes, getIndicator, htfApplies, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
-import { htfTrend } from "@/lib/engine/htf";
+import { detectTfMinutes, getIndicator, htfApplies, htfIndicator, htfWarmupBars, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
+import { htfTrend, normalizeHtf } from "@/lib/engine/htf";
 import { getPool, AbortedError } from "@/lib/engine/worker/pool";
-import { DEFAULT_CONFIG, HTF_LABELS, type BacktestConfig, type BacktestResult, type Bars, type LinePlot, type Params } from "@/lib/engine/types";
+import { DEFAULT_CONFIG, HTF_LABELS, type BacktestConfig, type BacktestResult, type Bars, type PanePlot, type Params } from "@/lib/engine/types";
 import { useKlineData } from "./lib/use-kline-data";
 import { useHtfData } from "./lib/use-htf-data";
 import { useLocalState } from "./lib/use-local-state";
@@ -130,15 +130,18 @@ export default function KlinesPage() {
     loadLatest(symbol, interval, desiredTotal);
   }, [ready, data.loading, data.klines.length, isLatest, bars.length, desiredTotal, symbol, interval, loadLatest]);
 
-  // ─── Higher-timeframe trend filter (e.g. EMA Cross on 1D while trading 30m) ──
+  // ─── Higher-timeframe trend filter (e.g. CCI on 3D while trading 30m) ──
+  const htfCfg = useMemo(() => normalizeHtf(config.htf), [config.htf]);
+  const htfInd = useMemo(() => htfIndicator(htfCfg), [htfCfg]);
   // Same bar spacing the engine detects, so a CSV of another timeframe is handled correctly
   const dataTfMinutes = bars.length > 1 ? detectTfMinutes(bars) : tfMinutes;
-  const htfActive = htfApplies(config.htf, dataTfMinutes);
+  const htfActive = htfApplies(htfCfg, dataTfMinutes);
   const csvSymbol = data.source?.kind === "csv" ? /^([A-Z0-9]{5,})_/.exec(data.source.file)?.[1] : undefined;
   const htf = useHtfData({
     active: htfActive,
     symbol: csvSymbol ?? symbol,
-    filter: config.htf,
+    interval: htfCfg.interval,
+    warmBars: useMemo(() => htfWarmupBars(htfCfg), [htfCfg]),
     firstTime: bars.length ? bars.time[0] : null,
     lastTime: bars.length ? bars.time[bars.length - 1] : null,
     ltfMinutes: dataTfMinutes,
@@ -146,21 +149,24 @@ export default function KlinesPage() {
   const htfReady = !htfActive || !!htf.klines;
   const htfBars = useMemo(() => (htf.klines ? toBars(htf.klines) : null), [htf.klines]);
   const trend = useMemo(
-    () => (htfActive && htfBars && bars.length ? htfTrend(bars, htfBars, config.htf, dataTfMinutes) : null),
-    [htfActive, htfBars, bars, config.htf, dataTfMinutes],
+    () => (htfActive && htfBars && bars.length
+      ? htfTrend(bars, htfBars, htfInd.def, htfInd.params, htfCfg.interval, dataTfMinutes)
+      : null),
+    [htfActive, htfBars, bars, htfInd, htfCfg.interval, dataTfMinutes],
   );
-  const htfLabel = HTF_LABELS[config.htf.interval];
-  const htfOverlays = useMemo<LinePlot[]>(() => {
-    if (!trend) return [];
-    const { fast, slow } = config.htf;
-    return [
-      // fast EMA colored by the higher-timeframe state: green = Long only, red = Short only
-      // drawn as a wide translucent band so it is not mistaken for the strategy's own lines
-      { kind: "line", title: `EMA${fast} ${htfLabel}`, color: "rgba(16,185,129,0.4)", width: 4, values: trend.fast,
-        colors: Array.from(trend.regime, (r) => (r === 1 ? "rgba(16,185,129,0.4)" : r === -1 ? "rgba(239,68,68,0.4)" : null)) },
-      { kind: "line", title: `EMA${slow} ${htfLabel}`, color: "#94a3b8", width: 1, style: 2, values: trend.slow },
-    ];
-  }, [trend, config.htf, htfLabel]);
+  const htfLabel = `${htfInd.def.name} ${HTF_LABELS[htfCfg.interval]}`;
+  // The filter's own lines (dashed) on the price + a strip showing the allowed side
+  const htfOverlays = trend?.overlays;
+  const htfPanes = useMemo<PanePlot[]>(() => (trend
+    ? [{
+        title: `ทิศ ${htfLabel}`,
+        series: [{
+          kind: "histogram", title: `ทิศ ${htfLabel}`, color: "#94a3b8",
+          values: Array.from(trend.regime, (r) => (r === 0 ? null : r)),
+          colors: Array.from(trend.regime, (r) => (r === 1 ? "rgba(16,185,129,0.6)" : r === -1 ? "rgba(239,68,68,0.6)" : null)),
+        }],
+      }]
+    : []), [trend, htfLabel]);
 
   // ─── Single backtest (auto-runs on the worker pool, debounced) ──
   const [single, setSingle] = useState<{ bars: Bars; result: BacktestResult } | null>(null);
@@ -173,8 +179,8 @@ export default function KlinesPage() {
 
   // Must run before the backtest effect below so jobs see the new higher-timeframe bars
   useEffect(() => {
-    getPool().setHtf(htf.klines ? config.htf.interval : null, htf.klines);
-  }, [htf.klines, config.htf.interval]);
+    getPool().setHtf(htf.klines ? htfCfg.interval : null, htf.klines);
+  }, [htf.klines, htfCfg.interval]);
 
   useEffect(() => {
     if (bars.length === 0) { setRunning(false); return; }
@@ -348,7 +354,7 @@ export default function KlinesPage() {
               </div>
 
               {bars.length > 0 ? (
-                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} extraOverlays={htfOverlays} />
+                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} extraOverlays={htfOverlays} extraPanes={htfPanes} />
               ) : (
                 <div className="grid h-[320px] place-items-center text-xs text-muted-foreground lg:h-[460px]">
                   {data.loading ? `กำลังโหลด ${symbol} ${interval}…${data.progress ? ` ${data.progress.toLocaleString()} แท่ง` : ""}` : "ยังไม่มีข้อมูล — กดปุ่ม “ข้อมูล” ด้านบน"}
@@ -436,7 +442,7 @@ export default function KlinesPage() {
               onScope={setRankScope}
               favorites={favorites}
               mode={config.mode}
-              htfNote={htfActive ? `ตัวกรอง EMA ${config.htf.fast}/${config.htf.slow} ${htfLabel}` : null}
+              htfNote={htfActive ? `ตัวกรอง ${htfLabel}` : null}
               workers={ready ? getPool().size : 1}
               barCount={bars.length}
               currentId={def.id}
