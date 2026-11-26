@@ -13,15 +13,38 @@ import {
   engineOf, getIndicator, htfApplies, htfIndicator, htfIndicatorWarmup, normalizeParams, planRun, warmupOf,
 } from "@/lib/engine/registry";
 import { INTERVAL_MINUTES, parseKline, type BinanceKlineRaw, type Interval, type KlineData } from "@/lib/types/kline";
-import type { BacktestConfig, BacktestResult, IndicatorDef, Params, Side, StopRule, TradeMode } from "@/lib/engine/types";
+import type { BacktestConfig, BacktestResult, IndicatorDef, LinePlot, Params, Side, StopRule, Trade, TradeMode } from "@/lib/engine/types";
 import type { BotPreset } from "./presets";
 
 export type Market = "spot" | "futures";
 
-/** Bars evaluated after the warm-up — the backtest state the bot follows is built over this window */
-export const LIVE_EVAL_BARS = 500;
-/** Upper bound of candles fetched per evaluation */
-export const LIVE_MAX_BARS = 10_000;
+/**
+ * Bars evaluated when the bot starts — the backtest state it follows is built over this window.
+ * Measured on 20,000 BTCUSDT bars: many strategies hold a position for more than 500 bars
+ * (Ichimoku 796, WaveTrend 1,006, Support/Resistance 1,414, OrderFlow 1,665), so 500 was too short.
+ * The start of the window is then *anchored* in time (it does not slide), see use-bot.
+ */
+export const LIVE_EVAL_BARS = 1500;
+/**
+ * Extra history before the indicator's own warm-up. Recursive indicators with a short declared
+ * warm-up (Supertrend, Parabolic SAR, CM MACD, VWAP, SMC) still differed on 1–5 of the last 500 bars
+ * without it; with 500 more bars every indicator matched a 20,000-bar reference exactly.
+ */
+export const LIVE_WARM_MARGIN = 500;
+/** Bars the anchored window may grow by before it is restarted (only while the bot holds nothing) */
+export const LIVE_GROW_BARS = 5000;
+/** Upper bound of candles loaded — same limit as the backtest page */
+export const LIVE_MAX_BARS = 50_000;
+
+/** What the chart needs to draw exactly what the bot evaluated */
+export interface LiveChart {
+  /** Backtest trades of the evaluated window (the last one may still be open: exitReason "end") */
+  trades: Trade[];
+  /** Higher-timeframe state per closed candle (null = filter off) */
+  regime: Int8Array | null;
+  /** The filter indicator's own lines, stepped onto the chart candles */
+  overlays: LinePlot[];
+}
 
 export interface LiveEval {
   /** Position the strategy holds now (after a next-open order decided at the last close) */
@@ -45,6 +68,9 @@ export interface LiveEval {
   atr: number | null;
   bars: number;
   warmup: number;
+  /** Closed candles the backtest state was built over (from the anchored start to now) */
+  evalBars: number;
+  chart: LiveChart;
 }
 
 /** Trade direction the preset uses on this market (Spot cannot short) */
@@ -72,7 +98,7 @@ export function presetBlocker(p: BotPreset, market: Market): string | null {
 /** Candles to fetch for this preset: warm-up + evaluation window */
 export function barsNeeded(def: IndicatorDef, params: Params, interval: Interval): { total: number; warmup: number; capped: boolean } {
   const warmup = warmupOf(def, params, INTERVAL_MINUTES[interval] ?? 60);
-  const want = warmup + LIVE_EVAL_BARS + 2;
+  const want = warmup + LIVE_WARM_MARGIN + LIVE_EVAL_BARS + 2;
   return { total: Math.min(LIVE_MAX_BARS, want), warmup, capped: want > LIVE_MAX_BARS };
 }
 
@@ -92,6 +118,8 @@ export function evaluateLive(input: {
   nowPrice: number;
   /** Higher-timeframe candles for the trend filter (null when the filter is off) */
   htfKlines: KlineData[] | null;
+  /** Closed candles to evaluate, counted from the anchored start (default: LIVE_EVAL_BARS) */
+  evalBars?: number;
 }): LiveEval {
   const { preset, market, closed } = input;
   const def = getIndicator(preset.indicatorId);
@@ -103,21 +131,24 @@ export function evaluateLive(input: {
 
   const bars = toBars(closed);
   const n = bars.length;
-  const { ctx, warmup } = planRun(def, params, bars, LIVE_EVAL_BARS);
+  const { ctx, warmup } = planRun(def, params, bars, input.evalBars ?? LIVE_EVAL_BARS);
   if (n - ctx.startIndex < 30) {
     throw new Error(`ข้อมูลไม่พอ: ต้องอุ่นเครื่อง ${warmup.toLocaleString()} แท่ง + ประเมินอย่างน้อย 30 แท่ง (มี ${n.toLocaleString()})`);
   }
 
   // Trend filter on the higher timeframe (closed candles only)
   let regime: Int8Array | null = null;
+  let overlays: LinePlot[] = [];
   let htfLabel: string | null = null;
   if (htfApplies(cfg.htf, ctx.tfMinutes)) {
     const h = htfIndicator(cfg.htf);
     htfLabel = `${h.def.name} ${h.filter.interval}`;
     if (!input.htfKlines?.length) throw new Error(`ยังไม่มีข้อมูล ${h.filter.interval} สำหรับตัวกรองเทรนด์`);
-    regime = htfTrend(bars, toBars(input.htfKlines), h.def, h.params, h.filter.interval, ctx.tfMinutes, {
-      warmup: htfIndicatorWarmup(h.def, h.params, h.filter.interval),
-    }).regime;
+    const trend = htfTrend(bars, toBars(input.htfKlines), h.def, h.params, h.filter.interval, ctx.tfMinutes, {
+      overlays: true, warmup: htfIndicatorWarmup(h.def, h.params, h.filter.interval),
+    });
+    regime = trend.regime;
+    overlays = trend.overlays;
   }
 
   const r = def.compute(bars, params, ctx);
@@ -179,6 +210,8 @@ export function evaluateLive(input: {
     atr: atrArr[n - 1] ?? null,
     bars: n,
     warmup,
+    evalBars: n - ctx.startIndex,
+    chart: { trades: res.trades, regime, overlays },
   };
 }
 

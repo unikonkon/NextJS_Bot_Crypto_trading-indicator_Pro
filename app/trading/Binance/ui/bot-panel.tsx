@@ -18,6 +18,7 @@ import { presetBlocker, presetDirection } from "@/lib/trading/live";
 import { fmtPct, fmtPrice, toneClass } from "@/app/klines/lib/format";
 import { CLOSE_REASON_LABEL, type Bot, type BotLog } from "../lib/use-bot";
 import { Empty, Field, Notice, Section, Stat, fmtCountdown, fmtQty, fmtTime, fmtUsd, selectClass } from "./parts";
+import { ChartPanel } from "./chart-panel";
 
 const POLL_OPTIONS = [5, 10, 15, 30, 60, 120, 300];
 const MODE_TEXT = { long: "Long อย่างเดียว", short: "Short อย่างเดียว", both: "Long + Short" } as const;
@@ -200,12 +201,23 @@ function StrategyNow({ bot }: { bot: Bot }) {
   const ev = bot.evalInfo;
   if (!ev) {
     return (
-      <Section title="กลยุทธ์ตอนนี้บอกอะไร" desc="ผลจากแท่งเทียนที่ปิดแล้วล่าสุด — แสดงเมื่อบอทเริ่ม หรือกด “ดูสัญญาณตอนนี้”">
-        <Empty icon={<ChartLineUp size={22} />} title="ยังไม่ได้คำนวณ" />
+      <Section title="กลยุทธ์ตอนนี้บอกอะไร" desc="ผลจากแท่งเทียนที่ปิดแล้วล่าสุด — แสดงเมื่อเลือกกลยุทธ์ เริ่มบอท หรือกด “ดูสัญญาณตอนนี้”">
+        <Empty icon={<ChartLineUp size={22} />} title={bot.busy ? "กำลังคำนวณ…" : "ยังไม่ได้คำนวณ"} />
       </Section>
     );
   }
-  const target = bot.settings.market === "spot" && ev.target === "short" ? null : ev.target;
+  const spot = bot.settings.market === "spot";
+  const target = spot && ev.target === "short" ? null : ev.target;
+  // Sides this bot can open here, against the side the trend filter allows right now
+  const dir = bot.preset ? presetDirection(bot.preset) : "both";
+  const canLong = dir !== "short";
+  const canShort = !spot && dir !== "long";
+  const filterBlock = ev.htfState === null ? null
+    : ev.htfState === 0 ? "ตัวกรองเทรนด์ยังไม่ทราบทิศ — บอทจะยังไม่เปิดไม้ใหม่"
+    : ev.htfState === -1 && !canShort
+      ? `ตัวกรอง ${ev.htfLabel} ตอนนี้อนุญาตเฉพาะ Short แต่${spot ? " Spot เปิดได้แค่ Long" : "กลยุทธ์นี้เปิดเฉพาะ Long"} — บอทจะยังไม่เข้าไม้จนกว่าตัวกรองจะกลับเป็นขาขึ้น${spot && dir !== "long" ? " (ถ้าต้องการเทรดฝั่ง Short ให้เลือกตลาด Futures)" : ""}`
+    : ev.htfState === 1 && !canLong ? `ตัวกรอง ${ev.htfLabel} ตอนนี้อนุญาตเฉพาะ Long แต่กลยุทธ์นี้เปิดเฉพาะ Short — บอทจะยังไม่เข้าไม้จนกว่าตัวกรองจะกลับเป็นขาลง`
+    : null;
   return (
     <Section title="กลยุทธ์ตอนนี้บอกอะไร" desc={`แท่งที่ปิดล่าสุด ${fmtTime(ev.lastClosedTime)} · ราคาปิด ${fmtPrice(ev.lastClose)}`}>
       <div className="space-y-3">
@@ -225,6 +237,8 @@ function StrategyNow({ bot }: { bot: Bot }) {
           </div>
         </div>
 
+        {filterBlock && !target && <Notice tone="warn" title="ตอนนี้บอทจะไม่เปิดไม้">{filterBlock}</Notice>}
+
         <div className="grid grid-cols-2 gap-px bg-border text-[11px]">
           <Stat label="สัญญาณล่าสุด"
             value={ev.lastSignal ? (ev.lastSignal.dir === 1 ? "ซื้อ / ขาขึ้น" : "ขาย / ขาลง") : "—"}
@@ -233,9 +247,11 @@ function StrategyNow({ bot }: { bot: Bot }) {
           <Stat label={ev.htfLabel ? `ตัวกรอง ${ev.htfLabel}` : "ตัวกรองเทรนด์"}
             value={ev.htfState === null ? "ไม่ใช้" : ev.htfState === 1 ? "อนุญาตเฉพาะ Long" : ev.htfState === -1 ? "อนุญาตเฉพาะ Short" : "ยังไม่ทราบทิศ"}
             valueClass={ev.htfState === 1 ? "text-emerald-500" : ev.htfState === -1 ? "text-red-500" : undefined} />
-          <Stat label="Backtest ช่วงล่าสุด"
-            value={fmtPct(ev.windowReturnPct)} valueClass={toneClass(ev.windowReturnPct)} sub={`${ev.windowTrades} เทรด (แท่งล่าสุด ≤ 500)`} />
-          <Stat label="ข้อมูลที่ใช้" value={`${ev.bars.toLocaleString()} แท่ง`} sub={`อุ่นเครื่อง ${ev.warmup.toLocaleString()} แท่ง`} />
+          <Stat label="Backtest ช่วงที่บอทประเมิน"
+            value={fmtPct(ev.windowReturnPct)} valueClass={toneClass(ev.windowReturnPct)}
+            sub={`${ev.windowTrades} เทรด ใน ${ev.evalBars.toLocaleString()} แท่ง${spot && dir === "both" ? " (เฉพาะ Long)" : ""}`} />
+          <Stat label="ข้อมูลที่ใช้" value={`${ev.bars.toLocaleString()} แท่ง`}
+            sub={`อุ่นเครื่อง ${(ev.bars - ev.evalBars).toLocaleString()} · ประเมิน ${ev.evalBars.toLocaleString()}`} />
         </div>
         {ev.reason && <p className="border-l-2 border-primary/50 pl-2 text-[11px] leading-relaxed text-muted-foreground">{ev.reason}</p>}
       </div>
@@ -472,6 +488,7 @@ export function BotPanel({ bot, presets, onRemovePreset, connected, onGoConnect 
       {/* ── Status ── */}
       <div className="space-y-4">
         <StatusHero bot={bot} now={now} />
+        <ChartPanel bot={bot} />
         <StrategyNow bot={bot} />
         <Activity bot={bot} />
       </div>

@@ -17,7 +17,7 @@ import { HTF_MINUTES, type Side } from "@/lib/engine/types";
 import type { KlineData } from "@/lib/types/kline";
 import type { BotPreset } from "@/lib/trading/presets";
 import {
-  INTERVAL_MS, barsNeeded, evaluateLive, fetchLatest, floorToStep, mergeCandles, presetBlocker, splitClosed,
+  INTERVAL_MS, LIVE_EVAL_BARS, LIVE_GROW_BARS, barsNeeded, evaluateLive, fetchLatest, floorToStep, mergeCandles, presetBlocker, splitClosed,
   stopHit, stopsFor, trailLevel, usesLiveStops, type LiveEval, type LiveStops, type Market,
 } from "@/lib/trading/live";
 import { ApiError, api, hintFor, type Creds, type SymbolRules } from "./api";
@@ -32,6 +32,15 @@ export interface BotSettings {
   test: boolean;
   /** How often the price is checked between candle closes (seconds) */
   pollSec: number;
+  /** Price chart with the strategy's indicator shown on the bot tab */
+  showChart: boolean;
+}
+
+/** Candles for the chart: `closed` is exactly what the last evaluation used (new array per candle close) */
+export interface BotChart {
+  closed: KlineData[];
+  /** Candle in progress — refreshed on every price check */
+  forming: KlineData | null;
 }
 
 export interface BotPosition {
@@ -105,6 +114,7 @@ export const DEFAULT_SETTINGS: BotSettings = {
   leverage: 1,
   test: true,
   pollSec: 15,
+  showChart: true,
 };
 
 const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -161,6 +171,7 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<BotPhase>("stopped");
   const [evalInfo, setEvalInfo] = useState<LiveEval | null>(null);
+  const [chart, setChart] = useState<BotChart | null>(null);
   const [price, setPrice] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [lastCheck, setLastCheck] = useState<number | null>(null);
@@ -181,6 +192,11 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
   const tickingRef = useRef(false);
   const candlesRef = useRef<KlineData[]>([]);
   const htfRef = useRef<KlineData[]>([]);
+  /** Market the cached candles belong to (symbol|interval) and the cached filter timeframe */
+  const candlesKeyRef = useRef("");
+  const htfKeyRef = useRef("");
+  /** Open time of the first evaluated candle — fixed while the bot runs so the backtest state never shifts */
+  const anchorRef = useRef<number | null>(null);
   const lastEvalBarRef = useRef(0);
   const nextBarRef = useRef(0);
   const prevTargetRef = useRef<Side | null>(null);
@@ -388,20 +404,58 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
     if (!def) throw new Error(`ไม่พบ indicator ${p.indicatorName}`);
     const params = normalizeParams(def, p.params);
     const need = barsNeeded(def, params, p.interval);
-    const keep = need.total + 1;
+    const tfMs = INTERVAL_MS(p.interval);
 
-    // Candles: full history once, then only the newest few merged in
-    const fresh = candlesRef.current.length >= need.total
-      ? await fetchLatest(p.symbol, p.interval, 5)
-      : await fetchLatest(p.symbol, p.interval, keep);
-    candlesRef.current = mergeCandles(candlesRef.current.length >= need.total ? candlesRef.current : [], fresh, keep);
-    const { closed, forming } = splitClosed(candlesRef.current);
+    // Candles: the whole history once, then only what is new (refetching any hole left by sleep / offline)
+    const key = `${p.symbol}|${p.interval}`;
+    if (candlesKeyRef.current !== key) {
+      candlesKeyRef.current = key;
+      candlesRef.current = [];
+      htfRef.current = [];
+      anchorRef.current = null;
+    }
+    const cached = candlesRef.current;
+    if (!cached.length) {
+      candlesRef.current = await fetchLatest(p.symbol, p.interval, need.total + 1);
+    } else {
+      const lastTime = cached[cached.length - 1].openTime;
+      let fresh = await fetchLatest(p.symbol, p.interval, 5);
+      if (fresh.length && fresh[0].openTime > lastTime + tfMs) {
+        const missing = Math.ceil((fresh[fresh.length - 1].openTime - lastTime) / tfMs) + 2;
+        if (missing > need.total) {
+          // Away for longer than the whole window — start over
+          candlesRef.current = [];
+          anchorRef.current = null;
+          firstEvalRef.current = true;
+          fresh = await fetchLatest(p.symbol, p.interval, need.total + 1);
+        } else {
+          fresh = await fetchLatest(p.symbol, p.interval, missing);
+        }
+      }
+      candlesRef.current = mergeCandles(candlesRef.current, fresh, Infinity);
+    }
+
+    let { closed, forming } = splitClosed(candlesRef.current);
+    // The anchored window grows by one candle per close; restart it once it is far longer than needed,
+    // but only while nothing is held (a restart can change the simulated state)
+    if (trade && anchorRef.current !== null && closed.length > need.total + LIVE_GROW_BARS && !positionRef.current) {
+      candlesRef.current = candlesRef.current.slice(-(need.total + 1));
+      anchorRef.current = null;
+      firstEvalRef.current = true;
+      log("info", `ข้อมูลสะสมเกิน ${(need.total + LIVE_GROW_BARS).toLocaleString()} แท่ง — เริ่มช่วงประเมินใหม่ (ไม่กระทบสถานะ เพราะบอทไม่ได้ถืออะไรอยู่)`);
+      ({ closed, forming } = splitClosed(candlesRef.current));
+    }
     if (closed.length < 50) throw new Error(`แท่งเทียนไม่พอ (${closed.length})`);
     const last = closed[closed.length - 1];
-    const tfMs = INTERVAL_MS(p.interval);
     nextBarRef.current = forming ? forming.closeTime + 1 : last.closeTime + 1 + tfMs;
     setNextBarAt(nextBarRef.current);
     if (trade && last.openTime <= lastEvalBarRef.current) return null; // the exchange has not closed the candle yet
+
+    // Evaluation always starts at the same candle (anchor), so a long-held position is never "forgotten"
+    if (anchorRef.current === null) anchorRef.current = closed[Math.max(0, closed.length - LIVE_EVAL_BARS)].openTime;
+    let first = closed.length - 1;
+    while (first > 0 && closed[first - 1].openTime >= anchorRef.current) first--;
+    const evalBars = closed.length - first;
 
     // Higher-timeframe candles for the trend filter
     const htfCfg = normalizeHtf(p.config.htf);
@@ -410,19 +464,27 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
       const { filter } = htfIndicator(htfCfg);
       const htfMs = HTF_MINUTES[filter.interval] * 60_000;
       const want = Math.min(1500, htfWarmupBars(htfCfg) + Math.ceil((closed.length * tfMs) / htfMs) + 3);
-      const rows = htfRef.current.length >= want ? await fetchLatest(p.symbol, filter.interval, 3) : await fetchLatest(p.symbol, filter.interval, want);
-      htfRef.current = mergeCandles(htfRef.current.length >= want ? htfRef.current : [], rows, want);
+      const cur = htfKeyRef.current === filter.interval ? htfRef.current : [];
+      htfKeyRef.current = filter.interval;
+      if (cur.length < want) {
+        htfRef.current = await fetchLatest(p.symbol, filter.interval, want);
+      } else {
+        const fresh = await fetchLatest(p.symbol, filter.interval, 3);
+        const hole = fresh.length > 0 && fresh[0].openTime > cur[cur.length - 1].openTime + htfMs;
+        htfRef.current = hole ? await fetchLatest(p.symbol, filter.interval, want) : mergeCandles(cur, fresh, Infinity);
+      }
       htf = htfRef.current;
     }
 
     const nowPrice = forming ? +forming.open : +last.close;
-    const ev = evaluateLive({ preset: p, market: s.market, closed, nowPrice, htfKlines: htf });
+    const ev = evaluateLive({ preset: p, market: s.market, closed, nowPrice, htfKlines: htf, evalBars });
     lastEvalBarRef.current = last.openTime;
     lastEvalRef.current = ev;
     setEvalInfo(ev);
+    setChart({ closed, forming });
     setPrice(forming ? +forming.close : +last.close);
     return ev;
-  }, []);
+  }, [log]);
 
   const decide = useCallback(async (ev: LiveEval) => {
     const s = settingsRef.current;
@@ -487,12 +549,17 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
         const ev = await evaluateNow(true);
         if (ev) await decide(ev);
         else nextBarRef.current = Date.now() + 3000; // candle not closed on the exchange yet — retry soon
-      } else if (positionRef.current?.stops) {
+      } else {
+        // Between candle closes: refresh the candle in progress (chart + price) and check the stops
         const p = presetRef.current;
-        if (p) {
-          const now = await api.price(settingsRef.current.market, p.symbol);
+        const f = p ? (await fetchLatest(p.symbol, p.interval, 2)).pop() : undefined;
+        if (p && f) {
+          if (f.openTime > lastEvalBarRef.current) setChart((prev) => (prev ? { ...prev, forming: f } : prev));
+          const pos = positionRef.current;
+          // Signals come from the Spot chart; a Futures position is valued at the Futures price
+          const now = pos?.market === "futures" ? await api.price("futures", p.symbol) : +f.close;
           setPrice(now);
-          await checkStops(now);
+          if (pos?.stops) await checkStops(now);
         }
       }
       setLastCheck(Date.now());
@@ -558,6 +625,15 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
         const r = await api.futuresPrepare(c, p.symbol, s.leverage);
         log("info", `ตั้งค่า Futures ${p.symbol}: Leverage ${r.leverage}x · ${r.marginType}`, r.notes.join(" · ") || undefined);
       }
+      if (!s.test && !positionRef.current) {
+        // Not a blocker (money can be added later) — but say it now instead of failing at the first signal
+        const free = s.market === "spot"
+          ? parseFloat((await api.spotAccount(c)).balances.find((b) => b.asset === rules.quoteAsset)?.free ?? "0")
+          : (await api.futuresAccount(c)).availableBalance;
+        if (free < s.amountUsdt) {
+          log("warn", `ยอด ${rules.quoteAsset} พร้อมใช้ ${free.toLocaleString("en-US", { maximumFractionDigits: 2 })} น้อยกว่าเงินต่อไม้ ${s.amountUsdt} — คำสั่งเปิดสถานะจะไม่สำเร็จจนกว่าจะเติมเงินเข้า ${s.market === "spot" ? "Spot" : "Futures"}`);
+        }
+      }
     } catch (err) {
       const e = errText(err);
       setError(e.text);
@@ -567,8 +643,8 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
       return;
     }
     setBusy(null);
-    candlesRef.current = [];
-    htfRef.current = [];
+    // Candles loaded by a preview are reused; the evaluation window starts fresh from now
+    anchorRef.current = null;
     lastEvalBarRef.current = 0;
     nextBarRef.current = 0;
     firstEvalRef.current = true;
@@ -597,8 +673,6 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
     setBusy("กำลังคำนวณสัญญาณ…");
     setError(null);
     try {
-      candlesRef.current = [];
-      htfRef.current = [];
       await evaluateNow(false);
       setLastCheck(Date.now());
     } catch (err) {
@@ -629,8 +703,9 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
   useEffect(() => {
     if (runningRef.current) return;
     setEvalInfo(null);
-    candlesRef.current = [];
-    htfRef.current = [];
+    setChart(null);
+    setError(null);
+    anchorRef.current = null;
   }, [settings.presetId, settings.market]);
 
   // Network status
@@ -686,7 +761,7 @@ export function useBot(opts: { creds: Creds | null; presets: BotPreset[] }) {
 
   return {
     loaded, settings, setSettings, preset, position, logs, trades, stats, unrealized,
-    running, phase, evalInfo, price, busy, lastCheck, nextBarAt, error, blockers,
+    running, phase, evalInfo, chart, price, busy, lastCheck, nextBarAt, error, blockers,
     start, stop, preview, closeNow, forgetPosition, clearHistory,
   };
 }

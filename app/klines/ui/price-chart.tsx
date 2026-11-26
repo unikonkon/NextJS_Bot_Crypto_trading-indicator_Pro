@@ -44,6 +44,31 @@ interface Props {
   extraPanes?: PanePlot[];
   /** Trade picked in the history: scroll to it and mark its entry / exit (`seq` re-focuses the same trade) */
   focus?: { trade: Trade; seq: number } | null;
+  // ─── Live use (trading bot) — all optional, the backtest page passes none ───
+  /** Keep the zoom / scroll position while `bars` is replaced; refit only when this key changes */
+  fitKey?: string;
+  /** Candle still in progress, drawn after the last bar without recomputing the indicators */
+  liveBar?: LiveBar | null;
+  /** Horizontal price lines (the bot's entry, stop-loss, take-profit…) */
+  priceLines?: ChartPriceLine[];
+  /** Do not draw an exit marker for the trade that is only closed by the end of the data (still open live) */
+  hideEndExit?: boolean;
+}
+
+export interface LiveBar {
+  /** Open time, ms */
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface ChartPriceLine {
+  price: number;
+  color: string;
+  title: string;
 }
 
 const UP = "#10b981";
@@ -96,10 +121,11 @@ function plotData(times: UTCTimestamp[], s: SeriesPlot) {
   return out;
 }
 
-function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number) {
+function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number, live?: LiveBar | null) {
   if (!el || b.length === 0) return;
   const i = Math.max(0, Math.min(b.length - 1, idx));
-  const o = b.open[i], h = b.high[i], l = b.low[i], c = b.close[i];
+  const useLive = !!live && idx >= b.length;
+  const o = useLive ? live.open : b.open[i], h = useLive ? live.high : b.high[i], l = useLive ? live.low : b.low[i], c = useLive ? live.close : b.close[i];
   const chg = ((c - o) / o) * 100;
   const tone = c >= o ? UP : DOWN;
   // Values are numbers formatted by us — safe to inject
@@ -111,7 +137,7 @@ function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number) {
     `<b style="color:${tone}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</b>`;
 }
 
-export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays, extraPanes, focus }: Props) {
+export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays, extraPanes, focus, fitKey, liveBar, priceLines, hideEndExit }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -119,12 +145,18 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
   const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const indicatorSeriesRef = useRef<ISeriesApi<SeriesType>[]>([]);
-  const fittedBarsRef = useRef<Bars | null>(null);
+  const fittedBarsRef = useRef<Bars | string | null>(null);
   const focusLinesRef = useRef<IPriceLine[]>([]);
+  const userLinesRef = useRef<IPriceLine[]>([]);
+  const shownLenRef = useRef(0);
   const barsRef = useRef(bars);
+  const liveRef = useRef<LiveBar | null>(liveBar ?? null);
   useEffect(() => {
     barsRef.current = bars;
   }, [bars]);
+  useEffect(() => {
+    liveRef.current = liveBar ?? null;
+  }, [liveBar]);
 
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme !== "light";
@@ -171,9 +203,10 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
 
     const renderLegend = (param?: MouseEventParams<Time>) => {
       const b = barsRef.current;
-      let i = b.length - 1;
+      // Not hovering → the newest candle (the one in progress when there is one)
+      let i = liveRef.current ? b.length : b.length - 1;
       if (param?.logical !== undefined && param.time !== undefined) i = Math.round(param.logical);
-      writeLegend(legendRef.current, b, i);
+      writeLegend(legendRef.current, b, i, liveRef.current);
     };
     chart.subscribeCrosshairMove(renderLegend);
 
@@ -188,8 +221,10 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
       volRef.current = null;
       markersRef.current = null;
       focusLinesRef.current = [];
+      userLinesRef.current = [];
       indicatorSeriesRef.current = [];
       fittedBarsRef.current = null;
+      shownLenRef.current = 0;
     };
   }, []);
 
@@ -204,6 +239,10 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     if (!chart || !candle || !vol) return;
     const times = bars.time.map(toUTC);
     const barColors = plots.find((p) => p.ind.isStrategy)?.plot.barColors;
+    // Live: remember where the user is looking, to follow new candles only when the newest one is in view
+    const rangeBefore = fitKey !== undefined ? chart.timeScale().getVisibleLogicalRange() : null;
+    const lenBefore = shownLenRef.current;
+    shownLenRef.current = bars.length;
 
     candle.setData(times.map((time, i) => {
       const c = barColors?.[i];
@@ -272,13 +311,42 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     panes[0]?.setStretchFactor(compact ? 2.4 : 3.2);
     for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(i >= firstStrip ? 0.25 : 1);
 
-    if (fittedBarsRef.current !== bars && bars.length > 0) {
-      fittedBarsRef.current = bars;
+    const fitToken = fitKey ?? bars;
+    if (fittedBarsRef.current !== fitToken && bars.length > 0) {
+      fittedBarsRef.current = fitToken;
       writeLegend(legendRef.current, bars, bars.length - 1);
       const n = bars.length;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - (compact ? 120 : 220)), to: n + 3 });
+    } else if (rangeBefore && lenBefore > 0 && bars.length !== lenBefore) {
+      // Same market, candles appended (or older ones dropped): keep the same candles in view
+      const d = bars.length - lenBefore;
+      if (d < 0 || rangeBefore.to >= lenBefore - 1) chart.timeScale().setVisibleLogicalRange({ from: rangeBefore.from + d, to: rangeBefore.to + d });
     }
-  }, [bars, plots, compact, extraOverlays, extraPanes]);
+  }, [bars, plots, compact, extraOverlays, extraPanes, fitKey]);
+
+  // ─── Live: the candle in progress (after setData above, which drops it) ───
+  useEffect(() => {
+    const candle = candleRef.current, vol = volRef.current;
+    const n = bars.length;
+    if (!candle || !vol || !liveBar || n === 0 || liveBar.time <= bars.time[n - 1]) return;
+    const time = toUTC(liveBar.time);
+    try {
+      candle.update({ time, open: liveBar.open, high: liveBar.high, low: liveBar.low, close: liveBar.close });
+      vol.update({ time, value: liveBar.volume, color: liveBar.close >= liveBar.open ? "rgba(16,185,129,0.25)" : "rgba(239,68,68,0.25)" });
+    } catch {
+      /* older than the newest drawn candle — the next full update fixes it */
+    }
+    writeLegend(legendRef.current, bars, n, liveBar);
+  }, [bars, plots, compact, extraOverlays, extraPanes, liveBar]);
+
+  // ─── Live: price lines (entry / stop-loss / take-profit) ──
+  useEffect(() => {
+    const candle = candleRef.current;
+    if (!candle) return;
+    for (const l of userLinesRef.current) candle.removePriceLine(l);
+    userLinesRef.current = (priceLines ?? []).map((l) =>
+      candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: l.title }));
+  }, [priceLines]);
 
   // ─── Markers: trades (Long ▲ / Short ▼ / exits ●) or indicator markers ─
   useEffect(() => {
@@ -299,6 +367,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
           text: on ? (long ? "เข้า Long" : "เข้า Short") : long ? "L" : "S",
           ...(on ? { size: 2 } : {}),
         });
+        if (hideEndExit && t.exitReason === "end") continue;
         markers.push({
           time: toUTC(t.exitTime),
           position: long ? "aboveBar" : "belowBar",
@@ -323,7 +392,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     api.setMarkers(markers);
-  }, [trades, showTrades, plots, bars, focus]);
+  }, [trades, showTrades, plots, bars, focus, hideEndExit]);
 
   // ─── Focus a trade picked in the history ──────────────────
   useEffect(() => {
