@@ -20,8 +20,8 @@ export function SourceBadge({ source, className }: { source: Source; className?:
     v1: "border-border text-muted-foreground",
     v2: "border-sky-500/40 text-sky-500",
     v3: "border-violet-500/40 text-violet-500",
-    v4: "border-amber-500/40 text-amber-500",
-    v5: "border-emerald-500/40 text-emerald-500",
+    v4: "border-warn/40 text-warn",
+    v5: "border-up/40 text-up",
     v6: "border-pink-500/40 text-pink-500",
   };
   return <span className={cn("shrink-0 border px-1 text-[9px] font-semibold uppercase", tone[source], className)}>{source}</span>;
@@ -136,21 +136,21 @@ export function IndicatorPicker({ open, onClose, title, description, selected, o
                   <SourceBadge source={sourceOf(d)} />
                   <span className="truncate text-xs font-semibold">{d.name}</span>
                   <span className="shrink-0 border px-1.5 text-[9px] text-muted-foreground">{CATEGORY_LABELS[d.category]}</span>
-                  {managesExits(d) && <span className="shrink-0 border border-amber-500/40 px-1.5 text-[9px] text-amber-500">ออกเอง</span>}
+                  {managesExits(d) && <span className="shrink-0 border border-warn/40 px-1.5 text-[9px] text-warn">ออกเอง</span>}
                 </div>
                 <div className="mt-1.5 space-y-0.5 pl-6 text-[11px] leading-snug text-muted-foreground">
-                  {d.longRule && <p className="flex gap-1.5"><TrendUp size={13} className="mt-px shrink-0 text-emerald-500" />{d.longRule}</p>}
-                  {d.shortRule && <p className="flex gap-1.5"><TrendDown size={13} className="mt-px shrink-0 text-red-500" />{d.shortRule}</p>}
+                  {d.longRule && <p className="flex gap-1.5"><TrendUp size={13} className="mt-px shrink-0 text-up" />{d.longRule}</p>}
+                  {d.shortRule && <p className="flex gap-1.5"><TrendDown size={13} className="mt-px shrink-0 text-down" />{d.shortRule}</p>}
                   {!d.longRule && d.description && <p className="line-clamp-3">{d.description}</p>}
                 </div>
               </button>
               <button
                 type="button"
                 onClick={() => onToggleFavorite(d.id)}
-                className="grid w-12 shrink-0 place-items-center text-muted-foreground hover:text-amber-500"
+                className="grid w-12 shrink-0 place-items-center text-muted-foreground hover:text-warn"
                 aria-label={isFav ? "เอาออกจากรายการโปรด" : "เพิ่มในรายการโปรด"}
               >
-                <Star size={16} weight={isFav ? "fill" : "regular"} className={isFav ? "text-amber-500" : ""} />
+                <Star size={16} weight={isFav ? "fill" : "regular"} className={isFav ? "text-warn" : ""} />
               </button>
             </li>
           );

@@ -64,8 +64,8 @@ export function EquityChart({ curve, benchmark, height = 180 }: Props) {
           <path d={path} fill="none" stroke="#ef4444" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
         </g>
       </svg>
-      <span className="absolute right-1 top-0 text-[9px] tabular-nums text-emerald-500">+{max.toFixed(1)}%</span>
-      <span className="absolute bottom-0 right-1 text-[9px] tabular-nums text-red-500">{min.toFixed(1)}%</span>
+      <span className="absolute right-1 top-0 text-[9px] tabular-nums text-up">+{max.toFixed(1)}%</span>
+      <span className="absolute bottom-0 right-1 text-[9px] tabular-nums text-down">{min.toFixed(1)}%</span>
     </div>
   );
 }

@@ -48,12 +48,12 @@ export function KlineTable({ bars, signals, reasons }: { bars: Bars; signals?: n
                   <td className="px-2 py-1 text-right">{fmtPrice(bars.high[i])}</td>
                   <td className="px-2 py-1 text-right">{fmtPrice(bars.low[i])}</td>
                   <td className="px-2 py-1 text-right font-medium">{fmtPrice(bars.close[i])}</td>
-                  <td className={cn("px-2 py-1 text-right", chg >= 0 ? "text-emerald-500" : "text-red-500")}>{chg >= 0 ? "+" : ""}{chg.toFixed(2)}</td>
+                  <td className={cn("px-2 py-1 text-right", chg >= 0 ? "text-up" : "text-down")}>{chg >= 0 ? "+" : ""}{chg.toFixed(2)}</td>
                   <td className="px-2 py-1 text-right text-muted-foreground">{fmtNum(bars.volume[i])}</td>
                   {signals && (
                     <td className="px-2 py-1 text-center">
-                      {s === 1 && <span className="text-emerald-500">▲</span>}
-                      {s === -1 && <span className="text-red-500">▼</span>}
+                      {s === 1 && <span className="text-up">▲</span>}
+                      {s === -1 && <span className="text-down">▼</span>}
                     </td>
                   )}
                   {reasons && <td className="max-w-[360px] truncate px-2 py-1 text-[10px] text-muted-foreground" title={reasons[i] ?? ""}>{reasons[i] ?? ""}</td>}

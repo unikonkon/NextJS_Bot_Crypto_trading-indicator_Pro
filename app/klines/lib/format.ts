@@ -33,7 +33,7 @@ export function fmtDate(ts: number, withYear = false): string {
 }
 
 export function toneClass(v: number): string {
-  return v > 0 ? "text-emerald-500" : v < 0 ? "text-red-500" : "text-muted-foreground";
+  return v > 0 ? "text-up" : v < 0 ? "text-down" : "text-muted-foreground";
 }
 
 export const EXIT_REASON_LABEL: Record<string, string> = {

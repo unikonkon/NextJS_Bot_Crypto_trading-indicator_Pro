@@ -37,8 +37,8 @@ function Stat({ label, value, className, sub }: { label: string; value: string; 
 function SideCard({ side, s }: { side: "long" | "short"; s: SideStats }) {
   const long = side === "long";
   return (
-    <div className={cn("border p-3", long ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5")}>
-      <p className={cn("flex items-center gap-1.5 text-[11px] font-semibold", long ? "text-emerald-500" : "text-red-500")}>
+    <div className={cn("border p-3", long ? "border-up/30 bg-up/5" : "border-down/30 bg-down/5")}>
+      <p className={cn("flex items-center gap-1.5 text-[11px] font-semibold", long ? "text-up" : "text-down")}>
         {long ? <TrendUp size={14} weight="bold" /> : <TrendDown size={14} weight="bold" />}
         {long ? "ฝั่ง Long (ขาขึ้น)" : "ฝั่ง Short (ขาลง)"}
       </p>
@@ -48,7 +48,7 @@ function SideCard({ side, s }: { side: "long" | "short"; s: SideStats }) {
         <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] tabular-nums">
           <span className="text-muted-foreground">ผลตอบแทน</span><span className={cn("text-right font-semibold", toneClass(s.returnPct))}>{fmtPct(s.returnPct)}</span>
           <span className="text-muted-foreground">เทรด</span><span className="text-right">{s.trades} <span className="text-muted-foreground">({s.wins}W/{s.losses}L)</span></span>
-          <span className="text-muted-foreground">อัตราชนะ</span><span className={cn("text-right", s.winRate >= 50 ? "text-emerald-500" : "text-red-500")}>{s.winRate.toFixed(1)}%</span>
+          <span className="text-muted-foreground">อัตราชนะ</span><span className={cn("text-right", s.winRate >= 50 ? "text-up" : "text-down")}>{s.winRate.toFixed(1)}%</span>
           <span className="text-muted-foreground">เฉลี่ย/เทรด</span><span className={cn("text-right", toneClass(s.avgPnlPct))}>{fmtPct(s.avgPnlPct)}</span>
         </div>
       )}
@@ -80,8 +80,8 @@ function TradeList({ trades, onPick, picked }: { trades: Trade[]; onPick?: (t: T
           onChange={(v) => { setFilter(v); setPage(0); }}
           options={[
             { value: "all", label: `ทั้งหมด ${trades.length}` },
-            { value: "long", label: "Long", activeClass: "bg-emerald-500 text-white" },
-            { value: "short", label: "Short", activeClass: "bg-red-500 text-white" },
+            { value: "long", label: "Long", activeClass: "bg-up text-up-foreground" },
+            { value: "short", label: "Short", activeClass: "bg-down text-down-foreground" },
           ]}
         />
         {pages > 1 && (
@@ -99,7 +99,7 @@ function TradeList({ trades, onPick, picked }: { trades: Trade[]; onPick?: (t: T
           <li key={`${t.entryIdx}-${i}`}>
             <button type="button" onClick={() => onPick?.(t)} title="ดูเทรดนี้บนกราฟ"
               className={cn("flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40", t === picked && "bg-muted/60 ring-1 ring-inset ring-primary")}>
-            <span className={cn("grid size-7 shrink-0 place-items-center text-white", t.side === "long" ? "bg-emerald-500" : "bg-red-500")}>
+            <span className={cn("grid size-7 shrink-0 place-items-center", t.side === "long" ? "bg-up text-up-foreground" : "bg-down text-down-foreground")}>
               {t.side === "long" ? <TrendUp size={14} weight="bold" /> : <TrendDown size={14} weight="bold" />}
             </span>
             <div className="min-w-0 flex-1 text-[10px] tabular-nums text-muted-foreground">
@@ -135,7 +135,7 @@ function TradeList({ trades, onPick, picked }: { trades: Trade[]; onPick?: (t: T
               <tr key={`${t.entryIdx}-${i}`} onClick={() => onPick?.(t)} title="ดูเทรดนี้บนกราฟ"
                 className={cn("cursor-pointer hover:bg-muted/40", t === picked && "bg-muted/60 outline outline-1 -outline-offset-1 outline-primary")}>
                 <td className="px-2 py-1.5">
-                  <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-white", t.side === "long" ? "bg-emerald-500" : "bg-red-500")}>
+                  <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold", t.side === "long" ? "bg-up text-up-foreground" : "bg-down text-down-foreground")}>
                     {t.side === "long" ? "LONG" : "SHORT"}
                   </span>
                 </td>
@@ -202,7 +202,7 @@ export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, pi
           </div>
           <div className="text-right text-[11px]">
             {r.openSide ? (
-              <p className={cn("inline-flex items-center gap-1 px-2 py-1 font-semibold text-white", r.openSide === "long" ? "bg-emerald-500" : "bg-red-500")}>
+              <p className={cn("inline-flex items-center gap-1 px-2 py-1 font-semibold", r.openSide === "long" ? "bg-up text-up-foreground" : "bg-down text-down-foreground")}>
                 {r.openSide === "long" ? <TrendUp size={13} weight="bold" /> : <TrendDown size={13} weight="bold" />}
                 ถือ {r.openSide === "long" ? "Long" : "Short"} อยู่
               </p>
@@ -211,7 +211,7 @@ export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, pi
             )}
             {r.lastSignal && (
               <p className="mt-1 text-[10px] text-muted-foreground">
-                สัญญาณล่าสุด <span className={r.lastSignal.dir === 1 ? "text-emerald-500" : "text-red-500"}>{r.lastSignal.dir === 1 ? "▲ ขาขึ้น" : "▼ ขาลง"}</span>{" "}
+                สัญญาณล่าสุด <span className={r.lastSignal.dir === 1 ? "text-up" : "text-down"}>{r.lastSignal.dir === 1 ? "▲ ขาขึ้น" : "▼ ขาลง"}</span>{" "}
                 {r.lastSignal.barsAgo === 0 ? "แท่งล่าสุด" : `${r.lastSignal.barsAgo} แท่งก่อน`}
               </p>
             )}
@@ -238,7 +238,7 @@ export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, pi
         <div className="mt-3">
           <EquityChart curve={curve} benchmark={benchmark} />
           <p className="mt-1 flex gap-3 text-[10px] text-muted-foreground">
-            <span><span className="mr-1 inline-block h-0.5 w-3 bg-emerald-500 align-middle" />กลยุทธ์ (ทบต้น, รวมกำไรที่ยังไม่ปิด)</span>
+            <span><span className="mr-1 inline-block h-0.5 w-3 bg-up align-middle" />กลยุทธ์ (ทบต้น, รวมกำไรที่ยังไม่ปิด)</span>
             <span><span className="mr-1 inline-block w-3 border-t border-dashed border-current align-middle" />ซื้อแล้วถือ</span>
           </p>
         </div>
@@ -246,13 +246,13 @@ export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, pi
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-px border bg-border sm:grid-cols-4">
-        <Stat label="อัตราชนะ" value={`${r.winRate.toFixed(1)}%`} className={r.winRate >= 50 ? "text-emerald-500" : "text-red-500"} sub={`${r.wins}W / ${r.losses}L`} />
-        <Stat label="Profit Factor" value={r.profitFactor === Infinity ? "∞" : r.profitFactor.toFixed(2)} className={r.profitFactor > 1 ? "text-emerald-500" : "text-red-500"} />
-        <Stat label="Max Drawdown" value={`−${r.maxDrawdownPct.toFixed(2)}%`} className="text-red-500" />
+        <Stat label="อัตราชนะ" value={`${r.winRate.toFixed(1)}%`} className={r.winRate >= 50 ? "text-up" : "text-down"} sub={`${r.wins}W / ${r.losses}L`} />
+        <Stat label="Profit Factor" value={r.profitFactor === Infinity ? "∞" : r.profitFactor.toFixed(2)} className={r.profitFactor > 1 ? "text-up" : "text-down"} />
+        <Stat label="Max Drawdown" value={`−${r.maxDrawdownPct.toFixed(2)}%`} className="text-down" />
         <Stat label="จำนวนเทรด" value={String(r.totalTrades)} sub={`ถือเฉลี่ย ${r.avgBarsHeld.toFixed(1)} แท่ง`} />
-        <Stat label="กำไรเฉลี่ย" value={fmtPct(r.avgWinPct)} className="text-emerald-500" />
-        <Stat label="ขาดทุนเฉลี่ย" value={fmtPct(r.avgLossPct)} className="text-red-500" />
-        <Stat label="เทรดดีสุด / แย่สุด" value={fmtPct(r.bestTradePct, 1)} className="text-emerald-500" sub={fmtPct(r.worstTradePct, 1)} />
+        <Stat label="กำไรเฉลี่ย" value={fmtPct(r.avgWinPct)} className="text-up" />
+        <Stat label="ขาดทุนเฉลี่ย" value={fmtPct(r.avgLossPct)} className="text-down" />
+        <Stat label="เทรดดีสุด / แย่สุด" value={fmtPct(r.bestTradePct, 1)} className="text-up" sub={fmtPct(r.worstTradePct, 1)} />
         <Stat label="Sharpe (ต่อเทรด)" value={r.sharpeRatio.toFixed(3)} className={toneClass(r.sharpeRatio)} sub={`อยู่ในตลาด ${r.exposurePct.toFixed(0)}%`} />
       </div>
 

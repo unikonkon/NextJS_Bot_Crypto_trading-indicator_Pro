@@ -228,7 +228,7 @@ export function DataSheet(p: Props) {
             </div>
 
             {estBars > 0 && (
-              <p className={cn("flex items-start gap-1 text-[11px] tabular-nums", tooMany ? "text-red-500" : estBars > WARN_RANGE_BARS ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground")}>
+              <p className={cn("flex items-start gap-1 text-[11px] tabular-nums", tooMany ? "text-down" : estBars > WARN_RANGE_BARS ? "text-warn" : "text-muted-foreground")}>
                 {(tooMany || estBars > WARN_RANGE_BARS) && <Warning size={13} className="mt-px shrink-0" />}
                 <span>
                   {preset === "all" ? "สูงสุด " : ""}≈ {estBars.toLocaleString()} แท่ง {p.interval} ({Math.ceil(estBars / 1000)} รอบ)
@@ -313,7 +313,7 @@ export function DataSheet(p: Props) {
                         <span className={toneClass(chg)}>{fmtPct(chg)}</span>
                         <span className="text-muted-foreground"> · สูง {fmtPrice(f.high)} · ต่ำ {fmtPrice(f.low)}</span>
                       </p>
-                      {f.bars > BIG_FILE && <p className="text-[10px] text-amber-600 dark:text-amber-500">ไฟล์ใหญ่ · โหลดและคำนวณช้ากว่าปกติ</p>}
+                      {f.bars > BIG_FILE && <p className="text-[10px] text-warn">ไฟล์ใหญ่ · โหลดและคำนวณช้ากว่าปกติ</p>}
                     </div>
                   </button>
                 </div>

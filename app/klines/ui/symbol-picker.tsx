@@ -189,7 +189,7 @@ export function SymbolPicker({ open, onClose, symbol, onPick }: Props) {
           )}
           {!live && !liveError && <CircleNotch size={12} className="ml-auto shrink-0 animate-spin" aria-label="กำลังโหลดรายการจาก Binance" />}
         </p>
-        {liveError && <p className="text-[11px] text-amber-600 dark:text-amber-500">โหลดรายการสดจาก Binance ไม่ได้ — แสดงรายการที่บันทึกไว้</p>}
+        {liveError && <p className="text-[11px] text-warn">โหลดรายการสดจาก Binance ไม่ได้ — แสดงรายการที่บันทึกไว้</p>}
 
         <div className="grid grid-cols-3 gap-1.5">
           {coins.map((b) => {

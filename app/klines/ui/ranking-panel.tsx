@@ -259,7 +259,7 @@ function HtfGrid(p: Props) {
                   return (
                     <span key={id} className="inline-flex h-6 items-center gap-1 border bg-background pl-1.5 text-[10px]">
                       {getIndicator(id)?.name ?? id}
-                      {best && <span className="text-[9px] text-amber-500">★{HTF_LABELS[best]}</span>}
+                      {best && <span className="text-[9px] text-warn">★{HTF_LABELS[best]}</span>}
                       <button type="button" aria-label="เอาออก" onClick={() => set({ filters: v.filters.filter((x) => x !== id) })}
                         className="grid h-6 w-5 place-items-center text-muted-foreground hover:text-foreground"><X size={9} /></button>
                     </span>
@@ -270,7 +270,7 @@ function HtfGrid(p: Props) {
                 )}
               </div>
             ) : (
-              <p className="text-[10px] text-amber-500">ยังไม่ได้เลือกตัวกรอง</p>
+              <p className="text-[10px] text-warn">ยังไม่ได้เลือกตัวกรอง</p>
             )}
           </div>
 
@@ -284,7 +284,7 @@ function HtfGrid(p: Props) {
               </span>
             </div>
             {p.tfChoices.length === 0 ? (
-              <p className="text-[10px] text-amber-500">{p.source === "files" ? "ไม่มี timeframe ที่ใหญ่กว่าไฟล์ที่เลือก" : "ไม่มี timeframe ที่ใหญ่กว่ากราฟ — เปลี่ยนกราฟเป็น timeframe ที่เล็กลง"}</p>
+              <p className="text-[10px] text-warn">{p.source === "files" ? "ไม่มี timeframe ที่ใหญ่กว่าไฟล์ที่เลือก" : "ไม่มี timeframe ที่ใหญ่กว่ากราฟ — เปลี่ยนกราฟเป็น timeframe ที่เล็กลง"}</p>
             ) : (
               <div className="grid grid-cols-5 gap-1">
                 {p.tfChoices.map((tf) => {
@@ -294,7 +294,7 @@ function HtfGrid(p: Props) {
                       onClick={() => set({ intervals: on ? v.intervals.filter((x) => x !== tf) : [...v.intervals, tf] })}
                       className={cn("relative h-8 border text-[11px] font-medium tabular-nums transition-colors", on ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
                       {HTF_LABELS[tf]}
-                      {RECOMMENDED_TFS.has(tf) && <span className={cn("absolute right-0.5 top-0 text-[8px]", on ? "text-primary-foreground" : "text-amber-500")}>★</span>}
+                      {RECOMMENDED_TFS.has(tf) && <span className={cn("absolute right-0.5 top-0 text-[8px]", on ? "text-primary-foreground" : "text-warn")}>★</span>}
                     </button>
                   );
                 })}
@@ -304,7 +304,7 @@ function HtfGrid(p: Props) {
           </div>
 
           {/* 3) size of the run */}
-          <p className={cn("border-l-2 px-2 py-1 text-[10px] tabular-nums", p.runs > 5000 ? "border-amber-500 text-amber-500" : "border-primary/50 text-muted-foreground")}>
+          <p className={cn("border-l-2 px-2 py-1 text-[10px] tabular-nums", p.runs > 5000 ? "border-warn text-warn" : "border-primary/50 text-muted-foreground")}>
             {p.strategies} กลยุทธ์ × ({v.filters.length} ตัวกรอง × {tfs.length} TF + ไม่กรอง){p.source === "files" && ` × ${p.files.length} ไฟล์ (เฉพาะ TF ที่ใหญ่กว่าไฟล์)`} = <b>{p.runs.toLocaleString()}</b> รอบ
             {p.runs > 5000 && " · หลายพันรอบ อาจใช้เวลาหลายสิบวินาที"}
           </p>
@@ -326,7 +326,7 @@ function FilterBadge({ f }: { f: RankFilter | null }) {
       <Funnel size={9} className="shrink-0" />
       <span className="truncate">{filterName(f)}</span>
       <b className="shrink-0">{HTF_LABELS[f.interval]}</b>
-      {isRecommendedPair(f) && <span className="shrink-0 text-amber-500">★</span>}
+      {isRecommendedPair(f) && <span className="shrink-0 text-warn">★</span>}
     </span>
   );
 }
@@ -356,10 +356,10 @@ function RowItem({ row, rank, base, active, onApply, allFiles }: { row: RankRow;
           </div>
           {a && (
             <p className="flex flex-wrap gap-x-2 text-[10px] tabular-nums text-muted-foreground">
-              <span>กำไร <b className={a.profitable === a.n ? "text-emerald-500" : a.profitable === 0 ? "text-red-500" : "text-foreground"}>{a.profitable}/{a.n}</b> ไฟล์</span>
+              <span>กำไร <b className={a.profitable === a.n ? "text-up" : a.profitable === 0 ? "text-down" : "text-foreground"}>{a.profitable}/{a.n}</b> ไฟล์</span>
               {a.n > 1 && <span>แย่สุด {fileLabel(a.worst.file, allFiles)} <span className={toneClass(a.worst.ret)}>{fmtPct(a.worst.ret, 0)}</span></span>}
               {a.n > 1 && <span>ดีสุด {fileLabel(a.best.file, allFiles)} <span className={toneClass(a.best.ret)}>{fmtPct(a.best.ret, 0)}</span></span>}
-              {a.n < a.total && <span className="text-amber-500">รันไม่ได้ {a.total - a.n} ไฟล์</span>}
+              {a.n < a.total && <span className="text-warn">รันไม่ได้ {a.total - a.n} ไฟล์</span>}
             </p>
           )}
           {s ? (
@@ -369,13 +369,13 @@ function RowItem({ row, rank, base, active, onApply, allFiles }: { row: RankRow;
                 <span>PF {s.profitFactor === Infinity ? "∞" : s.profitFactor.toFixed(2)}</span>
                 <span>DD −{s.maxDrawdownPct.toFixed(0)}%</span>
                 <span>{s.totalTrades} เทรด</span>
-                {s.long.trades > 0 && <span className="inline-flex items-center gap-0.5"><TrendUp size={10} className="text-emerald-500" /><span className={toneClass(s.long.returnPct)}>{fmtPct(s.long.returnPct, 0)}</span></span>}
-                {s.short.trades > 0 && <span className="inline-flex items-center gap-0.5"><TrendDown size={10} className="text-red-500" /><span className={toneClass(s.short.returnPct)}>{fmtPct(s.short.returnPct, 0)}</span></span>}
+                {s.long.trades > 0 && <span className="inline-flex items-center gap-0.5"><TrendUp size={10} className="text-up" /><span className={toneClass(s.long.returnPct)}>{fmtPct(s.long.returnPct, 0)}</span></span>}
+                {s.short.trades > 0 && <span className="inline-flex items-center gap-0.5"><TrendDown size={10} className="text-down" /><span className={toneClass(s.short.returnPct)}>{fmtPct(s.short.returnPct, 0)}</span></span>}
               </p>
               <Sparkline values={s.spark} width={64} height={20} />
             </div>
           ) : (
-            <p className="truncate text-[10px] text-red-500">{row.error ?? "ข้อมูลไม่พอ"}</p>
+            <p className="truncate text-[10px] text-down">{row.error ?? "ข้อมูลไม่พอ"}</p>
           )}
         </div>
       </button>
@@ -510,7 +510,7 @@ export function RankingPanel(p: Props) {
                 <SmallButton onClick={p.onPickFiles}><Files size={10} className="mr-0.5 inline" />แก้ไข…</SmallButton>
               </div>
             ) : (
-              <p className="flex items-center gap-2 text-[10px] text-amber-500">
+              <p className="flex items-center gap-2 text-[10px] text-warn">
                 ยังไม่ได้เลือกไฟล์ <SmallButton onClick={p.onPickFiles}><Files size={10} className="mr-0.5 inline" />เลือกไฟล์…</SmallButton>
               </p>
             )}
@@ -567,10 +567,10 @@ export function RankingPanel(p: Props) {
             : p.rankHtf.enabled ? `รัน ${p.runs.toLocaleString()} รอบ (หาคู่ที่ดีที่สุด)` : `รัน Backtest ${p.strategies} indicator`}
         </Button>
       )}
-      {p.source === "chart" && p.barCount > 0 && p.barCount < 50 && <p className="text-[11px] text-amber-500">ต้องมีอย่างน้อย 50 แท่งเทียน</p>}
+      {p.source === "chart" && p.barCount > 0 && p.barCount < 50 && <p className="text-[11px] text-warn">ต้องมีอย่างน้อย 50 แท่งเทียน</p>}
 
       {p.stale && list && (
-        <p className="flex gap-1.5 border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[10px] text-amber-500">
+        <p className="flex gap-1.5 border border-warn/30 bg-warn/5 px-2 py-1.5 text-[10px] text-warn">
           <Warning size={13} className="shrink-0" /> ข้อมูลหรือการตั้งค่าเปลี่ยนไป — กดรันใหม่เพื่ออัปเดตอันดับ
         </p>
       )}
@@ -639,7 +639,7 @@ export function RankingPanel(p: Props) {
                           <p className="flex flex-wrap gap-x-2 text-[10px] tabular-nums text-muted-foreground">
                             <span>กำไรเฉลี่ย <span className={toneClass(g.avgReturn)}>{fmtPct(g.avgReturn, 1)}</span></span>
                             {g.filter && <span>ดีขึ้น {g.improved}/{g.n} กลยุทธ์</span>}
-                            {g.unknown > 0.2 && <span className="text-amber-500">ไม่มีทิศ {Math.round(g.unknown * 100)}% ของช่วง (ข้อมูล TF ใหญ่ไม่พอ)</span>}
+                            {g.unknown > 0.2 && <span className="text-warn">ไม่มีทิศ {Math.round(g.unknown * 100)}% ของช่วง (ข้อมูล TF ใหญ่ไม่พอ)</span>}
                             {g.best && <span className="truncate">ดีสุด: {g.best.name} <span className={toneClass(g.best.summary!.totalReturnPct)}>{fmtPct(g.best.summary!.totalReturnPct, 1)}</span></span>}
                           </p>
                         </div>

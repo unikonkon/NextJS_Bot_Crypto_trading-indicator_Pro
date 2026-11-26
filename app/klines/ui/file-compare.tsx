@@ -67,7 +67,7 @@ export function FileCompare(p: Props) {
       )}
 
       {p.stale && p.rows && (
-        <p className="flex gap-1.5 border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[10px] text-amber-500">
+        <p className="flex gap-1.5 border border-warn/30 bg-warn/5 px-2 py-1.5 text-[10px] text-warn">
           <Warning size={13} className="shrink-0" /> กลยุทธ์ การตั้งค่า หรือไฟล์เปลี่ยนไป — กดทดสอบใหม่
         </p>
       )}
@@ -110,7 +110,7 @@ export function FileCompare(p: Props) {
                           <td className={cn("px-2 py-1.5 text-right", toneClass(s.buyAndHoldPct))}>{fmtPct(s.buyAndHoldPct, 0)}</td>
                         </>
                       ) : (
-                        <td colSpan={5} className="max-w-0 truncate px-2 py-1.5 text-[10px] text-red-500" title={r.error}>{r.error ?? "ข้อมูลไม่พอ"}</td>
+                        <td colSpan={5} className="max-w-0 truncate px-2 py-1.5 text-[10px] text-down" title={r.error}>{r.error ?? "ข้อมูลไม่พอ"}</td>
                       )}
                     </tr>
                   );

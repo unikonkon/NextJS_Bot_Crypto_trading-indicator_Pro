@@ -50,8 +50,8 @@ interface Props {
 }
 
 export const MODE_OPTIONS = [
-  { value: "long" as TradeMode, label: <><TrendUp size={15} weight="bold" />ขาขึ้น</>, activeClass: "bg-emerald-500 text-white" },
-  { value: "short" as TradeMode, label: <><TrendDown size={15} weight="bold" />ขาลง</>, activeClass: "bg-red-500 text-white" },
+  { value: "long" as TradeMode, label: <><TrendUp size={15} weight="bold" />ขาขึ้น</>, activeClass: "bg-up text-up-foreground" },
+  { value: "short" as TradeMode, label: <><TrendDown size={15} weight="bold" />ขาลง</>, activeClass: "bg-down text-down-foreground" },
   { value: "both" as TradeMode, label: <><ArrowsDownUp size={15} weight="bold" />ทั้งสองทาง</>, activeClass: "bg-primary text-primary-foreground" },
 ];
 
@@ -133,7 +133,7 @@ function ParamField({ pd, value, onChange }: { pd: ParamDef; value: number; onCh
         <span className="flex items-baseline justify-between gap-2">
           <span className="text-[11px] font-medium">
             {pd.label}
-            {changed && <span className="ml-1.5 text-[9px] text-amber-500">ค่าเริ่มต้น {pd.options[pd.default]}</span>}
+            {changed && <span className="ml-1.5 text-[9px] text-warn">ค่าเริ่มต้น {pd.options[pd.default]}</span>}
           </span>
         </span>
         <select
@@ -154,7 +154,7 @@ function ParamField({ pd, value, onChange }: { pd: ParamDef; value: number; onCh
       <div className="flex items-baseline justify-between gap-2">
         <label className="min-w-0 text-[11px] font-medium">
           {pd.label}
-          {changed && <span className="ml-1.5 text-[9px] text-amber-500">ค่าเริ่มต้น {pd.default}</span>}
+          {changed && <span className="ml-1.5 text-[9px] text-warn">ค่าเริ่มต้น {pd.default}</span>}
         </label>
         {pd.hint && <span className="truncate text-[10px] text-muted-foreground">{pd.hint}</span>}
       </div>
@@ -218,17 +218,17 @@ function HtfCard({ status, onClear, onFind }: { status: HtfStatus; onClear: () =
         <button type="button" onClick={onClear} aria-label="เอาตัวกรองออก" className="grid size-7 place-items-center border text-muted-foreground hover:text-foreground"><X size={12} /></button>
       </div>
       {!status.applies ? (
-        <p className="text-[10px] text-amber-500">ใช้ได้เมื่อกราฟเป็น timeframe ต่ำกว่าตัวกรอง (ตอนนี้ {status.chartTf}) — ตอนนี้ไม่มีผล</p>
+        <p className="text-[10px] text-warn">ใช้ได้เมื่อกราฟเป็น timeframe ต่ำกว่าตัวกรอง (ตอนนี้ {status.chartTf}) — ตอนนี้ไม่มีผล</p>
       ) : status.error ? (
-        <p className="text-[10px] text-red-500">{status.error}</p>
+        <p className="text-[10px] text-down">{status.error}</p>
       ) : status.loading || status.state === null ? (
         <p className="animate-pulse text-[10px] text-muted-foreground">กำลังโหลดข้อมูล timeframe ใหญ่…</p>
       ) : (
         <p className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
           {status.state === 1 ? (
-            <b className="inline-flex items-center gap-1 text-emerald-500"><TrendUp size={13} weight="bold" /> ขาขึ้น · เปิดได้เฉพาะ Long</b>
+            <b className="inline-flex items-center gap-1 text-up"><TrendUp size={13} weight="bold" /> ขาขึ้น · เปิดได้เฉพาะ Long</b>
           ) : status.state === -1 ? (
-            <b className="inline-flex items-center gap-1 text-red-500"><TrendDown size={13} weight="bold" /> ขาลง · เปิดได้เฉพาะ Short</b>
+            <b className="inline-flex items-center gap-1 text-down"><TrendDown size={13} weight="bold" /> ขาลง · เปิดได้เฉพาะ Short</b>
           ) : (
             <b className="text-muted-foreground">ยังไม่ทราบทิศ · ไม่เปิดไม้</b>
           )}
@@ -299,8 +299,8 @@ export function StrategyPanel(props: Props) {
           <CaretRight size={16} className="shrink-0 text-muted-foreground" />
         </button>
         <div className="grid gap-1 text-[11px] leading-snug">
-          {def.longRule && <p className="flex gap-1.5"><TrendUp size={14} className="mt-px shrink-0 text-emerald-500" /><span><b className="text-emerald-500">ขาขึ้น:</b> {def.longRule}</span></p>}
-          {def.shortRule && <p className="flex gap-1.5"><TrendDown size={14} className="mt-px shrink-0 text-red-500" /><span><b className="text-red-500">ขาลง:</b> {def.shortRule}</span></p>}
+          {def.longRule && <p className="flex gap-1.5"><TrendUp size={14} className="mt-px shrink-0 text-up" /><span><b className="text-up">ขาขึ้น:</b> {def.longRule}</span></p>}
+          {def.shortRule && <p className="flex gap-1.5"><TrendDown size={14} className="mt-px shrink-0 text-down" /><span><b className="text-down">ขาลง:</b> {def.shortRule}</span></p>}
           {def.description && <p className="text-muted-foreground">{def.description}</p>}
         </div>
         <p className="flex gap-1.5 text-[10px] text-muted-foreground">
@@ -377,15 +377,15 @@ export function StrategyPanel(props: Props) {
           </p>
         ) : (
           <>
-            <StopField label="Stop Loss" tone="text-red-500" rule={config.stopLoss} onChange={(stopLoss) => onConfig({ ...config, stopLoss })} />
-            <StopField label="Take Profit" tone="text-emerald-500" rule={config.takeProfit} onChange={(takeProfit) => onConfig({ ...config, takeProfit })} />
-            <StopField label="Trailing Stop" tone="text-amber-500" rule={config.trailing} onChange={(trailing) => onConfig({ ...config, trailing })} />
+            <StopField label="Stop Loss" tone="text-down" rule={config.stopLoss} onChange={(stopLoss) => onConfig({ ...config, stopLoss })} />
+            <StopField label="Take Profit" tone="text-up" rule={config.takeProfit} onChange={(takeProfit) => onConfig({ ...config, takeProfit })} />
+            <StopField label="Trailing Stop" tone="text-warn" rule={config.trailing} onChange={(trailing) => onConfig({ ...config, trailing })} />
             <label className="flex cursor-pointer items-center gap-2 text-[11px]">
               <input type="checkbox" className="size-4 accent-primary" checked={config.exitOnOpposite} onChange={(e) => onConfig({ ...config, exitOnOpposite: e.target.checked })} />
               ปิดสถานะเมื่อเกิดสัญญาณฝั่งตรงข้าม
             </label>
             {noExit && (
-              <p className="flex gap-1.5 text-[10px] text-amber-500"><Warning size={13} className="shrink-0" />ไม่มีเงื่อนไขปิดสถานะ — จะถือจนจบข้อมูล</p>
+              <p className="flex gap-1.5 text-[10px] text-warn"><Warning size={13} className="shrink-0" />ไม่มีเงื่อนไขปิดสถานะ — จะถือจนจบข้อมูล</p>
             )}
           </>
         )}
@@ -405,7 +405,7 @@ export function StrategyPanel(props: Props) {
       {/* sits just above the fixed mobile bottom nav (h-16 + safe area) */}
       <section className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur lg:static lg:mx-0 lg:border lg:px-3">
         {runError ? (
-          <p className="flex gap-1.5 text-[11px] text-amber-500"><Warning size={14} className="shrink-0" />{runError}</p>
+          <p className="flex gap-1.5 text-[11px] text-warn"><Warning size={14} className="shrink-0" />{runError}</p>
         ) : (
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
@@ -428,7 +428,7 @@ export function StrategyPanel(props: Props) {
           <div className="mt-2 flex items-center gap-2 border-t pt-2">
             {sentPresetId ? (
               <>
-                <p className="min-w-0 flex-1 text-[10px] leading-snug text-emerald-500">ส่งกลยุทธ์นี้ไปบอทแล้ว — เลือกใช้ได้ในหน้า Binance Trading</p>
+                <p className="min-w-0 flex-1 text-[10px] leading-snug text-up">ส่งกลยุทธ์นี้ไปบอทแล้ว — เลือกใช้ได้ในหน้า Binance Trading</p>
                 <Link href={`/trading/Binance?preset=${encodeURIComponent(sentPresetId)}`}
                   className="inline-flex h-9 shrink-0 items-center gap-1 bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90">
                   เปิดบอท <CaretRight size={12} />

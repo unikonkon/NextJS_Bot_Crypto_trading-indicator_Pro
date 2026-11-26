@@ -80,7 +80,7 @@ export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, chan
           </Button>
           <Link
             href="/trading/Binance"
-            className="hidden h-9 items-center border border-yellow-500/30 bg-yellow-500/10 px-2.5 text-[11px] font-medium text-yellow-500 hover:bg-yellow-500/20 md:inline-flex"
+            className="hidden h-9 items-center border px-2.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground md:inline-flex"
           >
             Binance Trading
           </Link>

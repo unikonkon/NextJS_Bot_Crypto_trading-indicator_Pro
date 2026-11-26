@@ -206,7 +206,7 @@ export default function KlinesPage() {
         series: [{
           kind: "histogram", title: `ทิศ ${htfLabel}`, color: "#94a3b8",
           values: Array.from(trend.regime, (r) => (r === 0 ? null : r)),
-          colors: Array.from(trend.regime, (r) => (r === 1 ? "rgba(16,185,129,0.6)" : r === -1 ? "rgba(239,68,68,0.6)" : null)),
+          colors: Array.from(trend.regime, (r) => (r === 1 ? "rgba(16,185,129,0.32)" : r === -1 ? "rgba(239,68,68,0.32)" : null)),
         }],
       }]
     : []), [trend, htfLabel]);
@@ -613,14 +613,14 @@ export default function KlinesPage() {
                     {result && (
                       <>
                         <span className="text-muted-foreground">{result.totalTrades} เทรด · ชนะ {result.winRate.toFixed(0)}%</span>
-                        <span className="inline-flex items-center gap-0.5"><TrendUp size={11} className="text-emerald-500" /><span className={toneClass(result.long.returnPct)}>{fmtPct(result.long.returnPct, 1)}</span></span>
-                        <span className="inline-flex items-center gap-0.5"><TrendDown size={11} className="text-red-500" /><span className={toneClass(result.short.returnPct)}>{fmtPct(result.short.returnPct, 1)}</span></span>
+                        <span className="inline-flex items-center gap-0.5"><TrendUp size={11} className="text-up" /><span className={toneClass(result.long.returnPct)}>{fmtPct(result.long.returnPct, 1)}</span></span>
+                        <span className="inline-flex items-center gap-0.5"><TrendDown size={11} className="text-down" /><span className={toneClass(result.short.returnPct)}>{fmtPct(result.short.returnPct, 1)}</span></span>
                       </>
                     )}
                   </p>
                 </div>
                 {result?.openSide && (
-                  <span className={cn("shrink-0 px-2 py-1 text-[10px] font-semibold text-white", result.openSide === "long" ? "bg-emerald-500" : "bg-red-500")}>
+                  <span className={cn("shrink-0 px-2 py-1 text-[10px] font-semibold", result.openSide === "long" ? "bg-up text-up-foreground" : "bg-down text-down-foreground")}>
                     ถือ {result.openSide === "long" ? "LONG" : "SHORT"}
                   </span>
                 )}
@@ -746,7 +746,7 @@ export default function KlinesPage() {
               {active && <span className="absolute inset-x-6 top-0 h-0.5 bg-primary" />}
               <Icon size={20} weight={active ? "fill" : "regular"} />
               {label}
-              {tab === "ranking" && rankRunning && <span className="absolute right-[30%] top-3 size-1.5 animate-pulse rounded-full bg-amber-500" />}
+              {tab === "ranking" && rankRunning && <span className="absolute right-[30%] top-3 size-1.5 animate-pulse rounded-full bg-warn" />}
             </button>
           );
         })}
