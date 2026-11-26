@@ -33,6 +33,26 @@ async function fetchPage(params: Record<string, string>, signal: AbortSignal): P
   return raw.map(parseKline);
 }
 
+/** The latest `limit` bars of `interval`, paging backwards (shared by the chart and multi-coin runs) */
+export async function fetchLatestKlines(
+  symbol: string, interval: string, limit: number, signal: AbortSignal, onProgress?: (n: number) => void,
+): Promise<KlineData[]> {
+  const all: KlineData[] = [];
+  let endTime: number | undefined;
+  while (all.length < limit) {
+    const want = Math.min(PAGE, limit - all.length);
+    const params: Record<string, string> = { symbol, interval, limit: String(want) };
+    if (endTime !== undefined) params.endTime = String(endTime);
+    const page = await fetchPage(params, signal);
+    if (page.length === 0) break;
+    all.unshift(...page);
+    onProgress?.(all.length);
+    if (page.length < want) break;
+    endTime = page[0].openTime - 1;
+  }
+  return all;
+}
+
 /** Every bar of `interval` between start and end, paging forwards (shared by the main data and the trend filter) */
 export async function fetchKlinesRange(
   symbol: string, interval: string, start: number, end: number, signal: AbortSignal, onProgress?: (n: number) => void,
@@ -115,22 +135,7 @@ export function useKlineData() {
 
   /** Latest N bars. N > 1000 pages backwards with endTime. */
   const loadLatest = useCallback((symbol: string, interval: Interval, limit: number) =>
-    run({ kind: "latest", limit }, async (signal) => {
-      const all: KlineData[] = [];
-      let endTime: number | undefined;
-      while (all.length < limit) {
-        const want = Math.min(PAGE, limit - all.length);
-        const params: Record<string, string> = { symbol, interval, limit: String(want) };
-        if (endTime !== undefined) params.endTime = String(endTime);
-        const page = await fetchPage(params, signal);
-        if (page.length === 0) break;
-        all.unshift(...page);
-        setProgress(all.length);
-        if (page.length < want) break;
-        endTime = page[0].openTime - 1;
-      }
-      return all;
-    }), [run]);
+    run({ kind: "latest", limit }, (signal) => fetchLatestKlines(symbol, interval, limit, signal, setProgress)), [run]);
 
   /** Every bar between start and end, paging forwards */
   const loadRange = useCallback((symbol: string, interval: Interval, start: number, end: number) =>

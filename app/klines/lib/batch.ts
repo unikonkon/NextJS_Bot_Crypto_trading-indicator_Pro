@@ -12,7 +12,7 @@ import { normalizeHtf } from "@/lib/engine/htf";
 import { HTF_MINUTES, type HtfInterval } from "@/lib/engine/types";
 import type { JobOutput, RunJob } from "@/lib/engine/runner";
 import { AbortedError, BacktestPool } from "@/lib/engine/worker/pool";
-import { fetchKlinesRange, normalizeKlines, parseCsv } from "./use-kline-data";
+import { fetchKlinesRange, fetchLatestKlines, normalizeKlines, parseCsv } from "./use-kline-data";
 
 /** 2017-01-01 UTC — Binance has no klines before 2017 */
 const EXCHANGE_START = Date.UTC(2017, 0, 1);
@@ -118,6 +118,112 @@ export async function runOnFiles<T>(opts: {
       const res = await pool.runMany(jobs.map((j) => j.job), (d) => { done = before + d; opts.onProgress?.(done, total, stage); }, signal);
       res.forEach((r, i) => out.push({ file, meta: jobs[i].meta, out: r }));
     }
+  } finally {
+    pool.terminate();
+  }
+  return out;
+}
+
+// ─── Several coins (latest N bars of each, straight from Binance) ──────────
+
+const COIN_TTL = 3 * 60_000;
+const coinCache = new Map<string, { at: number; p: Promise<KlineData[]> }>();
+
+function loadCoin(symbol: string, interval: Interval, bars: number): Promise<KlineData[]> {
+  const key = `${symbol}|${interval}|${bars}`;
+  const hit = coinCache.get(key);
+  if (hit && Date.now() - hit.at < COIN_TTL) return hit.p;
+  // Not tied to one run's abort: a cancelled run can still reuse what finished downloading
+  const p = fetchLatestKlines(symbol, interval, bars, new AbortController().signal).then(normalizeKlines);
+  p.catch(() => coinCache.delete(key));
+  coinCache.set(key, { at: Date.now(), p });
+  return p;
+}
+
+export interface CoinResult<T> {
+  symbol: string;
+  meta: T;
+  out: JobOutput | Error;
+}
+
+/**
+ * Run jobs on the latest `bars` bars of every symbol (one coin at a time, its jobs in parallel;
+ * the next coin downloads while the current one runs). A coin that fails to load gets error rows.
+ */
+export async function runOnCoins<T>(opts: {
+  symbols: string[];
+  interval: Interval;
+  /** Bars to download per coin (evaluation window + warm-up) */
+  bars: number;
+  jobsFor: (symbol: string) => FileJob<T>[];
+  onProgress?: (done: number, total: number, stage: string) => void;
+  signal: AbortSignal;
+}): Promise<CoinResult<T>[]> {
+  const { symbols, interval, bars, signal } = opts;
+  const tf = INTERVAL_MINUTES[interval] ?? 0;
+  const tfMs = tf * 60_000;
+  const plans = symbols.map((symbol) => ({ symbol, jobs: opts.jobsFor(symbol) }));
+  const total = symbols.length;
+  const loads = new Map<number, Promise<KlineData[]>>();
+  const get = (i: number) => {
+    let p = loads.get(i);
+    if (!p) {
+      p = loadCoin(plans[i].symbol, interval, bars);
+      p.catch(() => {});
+      loads.set(i, p);
+    }
+    return p;
+  };
+
+  const out: CoinResult<T>[] = [];
+  const fail = (symbol: string, jobs: FileJob<T>[], err: unknown) => {
+    const e = err instanceof Error ? err : new Error(String(err));
+    for (const j of jobs) out.push({ symbol, meta: j.meta, out: e });
+  };
+  const pool = new BacktestPool();
+  try {
+    for (let i = 0; i < plans.length; i++) {
+      if (signal.aborted) throw new AbortedError();
+      const { symbol, jobs } = plans[i];
+      opts.onProgress?.(i, total, `โหลด ${symbol}`);
+      let klines: KlineData[];
+      try {
+        klines = await get(i);
+      } catch (err) {
+        fail(symbol, jobs, err);
+        continue;
+      } finally {
+        if (i + 1 < plans.length) get(i + 1);
+      }
+      if (signal.aborted) throw new AbortedError();
+      if (klines.length < 50) { fail(symbol, jobs, new Error(`ข้อมูลไม่พอ (${klines.length} แท่ง)`)); continue; }
+
+      // Higher-timeframe bars for the trend filter, covering this coin's bars + warm-up
+      const sets: Partial<Record<HtfInterval, KlineData[]>> = {};
+      try {
+        for (const { job } of jobs) {
+          const h = job.config.htf;
+          if (!htfApplies(h, tf)) continue;
+          const f = normalizeHtf(h);
+          if (sets[f.interval]) continue;
+          const warmMs = htfWarmupBars(f) * HTF_MINUTES[f.interval] * 60_000;
+          const from = Math.max(EXCHANGE_START, Math.floor((klines[0].openTime - warmMs) / DAY) * DAY);
+          opts.onProgress?.(i, total, `โหลด ${symbol} ${f.interval} สำหรับตัวกรอง`);
+          sets[f.interval] = await loadHtf(symbol, f.interval, from, klines[klines.length - 1].openTime + tfMs);
+        }
+      } catch (err) {
+        fail(symbol, jobs, err);
+        continue;
+      }
+      if (signal.aborted) throw new AbortedError();
+
+      pool.setData(klines);
+      pool.setHtf(sets);
+      opts.onProgress?.(i, total, symbol);
+      const res = await pool.runMany(jobs.map((j) => j.job), undefined, signal);
+      res.forEach((r, k) => out.push({ symbol, meta: jobs[k].meta, out: r }));
+    }
+    opts.onProgress?.(total, total, "");
   } finally {
     pool.terminate();
   }

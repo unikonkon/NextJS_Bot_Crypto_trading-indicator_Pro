@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { CaretDown, Database, CircleNotch } from "@phosphor-icons/react";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -8,13 +7,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { INTERVALS, type Interval } from "@/lib/types/kline";
 import { fmtPct, fmtPrice, toneClass } from "../lib/format";
-import { SymbolPicker } from "./symbol-picker";
 
 const QUICK_INTERVALS: Interval[] = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"];
 
 interface Props {
   symbol: string;
-  onSymbol: (s: string) => void;
   interval: Interval;
   onInterval: (i: Interval) => void;
   lastClose: number | null;
@@ -22,11 +19,10 @@ interface Props {
   barCount: number;
   loading: boolean;
   onOpenData: () => void;
+  onOpenSymbol: () => void;
 }
 
-export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, changePct, barCount, loading, onOpenData }: Props) {
-  const [symOpen, setSymOpen] = useState(false);
-
+export function TopBar({ symbol, interval, onInterval, lastClose, changePct, barCount, loading, onOpenData, onOpenSymbol }: Props) {
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 lg:px-4">
@@ -37,7 +33,7 @@ export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, chan
         </span>
 
         {/* Symbol */}
-        <button type="button" onClick={() => setSymOpen(true)} className="flex min-w-0 items-center gap-2 px-1 py-1 hover:bg-muted" aria-label="เลือกคู่เหรียญ">
+        <button type="button" onClick={onOpenSymbol} className="flex min-w-0 items-center gap-2 px-1 py-1 hover:bg-muted" aria-label="เลือกคู่เหรียญ">
           <div className="min-w-0 text-left">
             <p className="flex items-center gap-1 text-sm font-bold leading-tight">{symbol}<CaretDown size={12} className="text-muted-foreground" /></p>
             <p className="text-[10px] tabular-nums leading-tight">
@@ -88,7 +84,6 @@ export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, chan
         </div>
       </div>
 
-      <SymbolPicker open={symOpen} onClose={() => setSymOpen(false)} symbol={symbol} onPick={onSymbol} />
     </header>
   );
 }

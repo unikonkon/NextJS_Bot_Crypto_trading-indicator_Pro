@@ -20,9 +20,10 @@ import PriceChart, { type ChartIndicator } from "./ui/price-chart";
 import { IndicatorPicker } from "./ui/indicator-picker";
 import { StrategyPanel } from "./ui/strategy-panel";
 import { ResultsPanel } from "./ui/results-panel";
-import { DEFAULT_RANK_HTF, RankingPanel, inScope, type RankHtf, type RankRow, type RankScope, type RankSource } from "./ui/ranking-panel";
-import { FileCompare, type CompareRow } from "./ui/file-compare";
-import { fileTfMinutes, runOnFiles } from "./lib/batch";
+import { DEFAULT_RANK_HTF, RankingPanel, fileLabel, inScope, type RankHtf, type RankRow, type RankScope, type RankSource } from "./ui/ranking-panel";
+import { MultiCompare, type CompareMode, type CompareRow } from "./ui/file-compare";
+import { SymbolPicker } from "./ui/symbol-picker";
+import { fileTfMinutes, runOnCoins, runOnFiles } from "./lib/batch";
 import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import { makePreset, savePreset } from "@/lib/trading/presets";
 
@@ -30,6 +31,8 @@ type MobileTab = "chart" | "strategy" | "results" | "ranking";
 
 /** Upper bound of bars fetched (evaluation window + warm-up) — 50 Binance requests */
 const MAX_BARS = 50_000;
+/** Evaluation bars per coin in a multi-coin test (each coin is downloaded from Binance) */
+const MAX_COIN_EVAL = 10_000;
 type SideTab = "strategy" | "ranking";
 
 const NAV: { tab: MobileTab; label: string; icon: typeof ChartLineUp }[] = [
@@ -55,6 +58,10 @@ export default function KlinesPage() {
   const [rankScope, setRankScope] = useLocalState<RankScope>("klines.rankScope", "all");
   /** CSV files picked for multi-file runs, and whether the ranking uses them */
   const [batchFiles, setBatchFiles] = useLocalState<string[]>("klines.batchFiles", []);
+  /** Coins (pairs) picked for the multi-coin test, and which kind of dataset the strategy tab compares */
+  const [batchCoins, setBatchCoins] = useLocalState<string[]>("klines.batchCoins", []);
+  const [compareMode, setCompareMode] = useLocalState<CompareMode>("klines.compareMode", "coins");
+  const [symOpen, setSymOpen] = useState<null | "single" | "multi">(null);
   const [rankSource, setRankSource] = useLocalState<RankSource>("klines.rankSource", "chart");
 
   // Wait one commit so persisted values are loaded before the first fetch
@@ -418,33 +425,55 @@ export default function KlinesPage() {
   }, []);
   const rankStale = !!rank && (rank.configKey !== configKey || (!rank.files && rank.bars !== bars));
 
-  // ─── Current strategy on every selected file (strategy tab) ──
-  const [compare, setCompare] = useState<{ rows: CompareRow[]; key: string } | null>(null);
+  // ─── Current strategy on several coins or CSV files (strategy tab) ──
+  const [compare, setCompare] = useState<Partial<Record<CompareMode, { rows: CompareRow[]; key: string }>>>({});
   const [compareRunning, setCompareRunning] = useState(false);
   const [compareProgress, setCompareProgress] = useState<{ done: number; total: number; stage: string } | null>(null);
   const compareCtrl = useRef<AbortController | null>(null);
-  const compareKey = `${def.id}|${JSON.stringify(params)}|${JSON.stringify(config)}|${filesKey}`;
+  // Coins use the chart's timeframe and "latest N bars" (capped), with the strategy's warm-up on top
+  const coinEval = Math.min(MAX_COIN_EVAL, limit);
+  const coinBars = Math.min(MAX_BARS, coinEval + strategyWarmup);
+  const strategyKey = `${def.id}|${JSON.stringify(params)}|${JSON.stringify(config)}`;
+  const compareKeys: Record<CompareMode, string> = {
+    files: `${strategyKey}|${filesKey}`,
+    coins: `${strategyKey}|${batchCoins.join(",")}|${interval}|${coinEval}`,
+  };
 
   const runCompare = useCallback(async () => {
-    const files = selectedFiles;
-    if (!files.length) return;
+    const mode = compareMode;
+    const key = compareKeys[mode];
+    if (mode === "files" ? !selectedFiles.length : !batchCoins.length) return;
     compareCtrl.current?.abort();
     const ctrl = new AbortController();
     compareCtrl.current = ctrl;
     setCompareRunning(true);
     setCompareProgress(null);
+    const job = { indicatorId: def.id, params, config, full: false as const };
+    const toRow = (k: string, label: string, out: unknown): CompareRow =>
+      out instanceof Error ? { key: k, label, summary: null, error: out.message } : { key: k, label, summary: out as BacktestSummary };
     try {
-      const res = await runOnFiles({
-        files,
-        fallbackSymbol: symbol,
-        signal: ctrl.signal,
-        onProgress: (done, total, stage) => setCompareProgress({ done, total, stage }),
-        jobsFor: () => [{ job: { indicatorId: def.id, params, config, full: false }, meta: null }],
-      });
-      setCompare({
-        key: compareKey,
-        rows: res.map(({ file, out }) => (out instanceof Error ? { file, summary: null, error: out.message } : { file, summary: out as BacktestSummary })),
-      });
+      let rows: CompareRow[];
+      if (mode === "files") {
+        const res = await runOnFiles({
+          files: selectedFiles,
+          fallbackSymbol: symbol,
+          signal: ctrl.signal,
+          onProgress: (done, total, stage) => setCompareProgress({ done, total, stage }),
+          jobsFor: () => [{ job, meta: null }],
+        });
+        rows = res.map(({ file, out }) => toRow(file.file, fileLabel(file.file, data.csvFiles), out));
+      } else {
+        const res = await runOnCoins({
+          symbols: batchCoins,
+          interval,
+          bars: coinBars,
+          signal: ctrl.signal,
+          onProgress: (done, total, stage) => setCompareProgress({ done, total, stage }),
+          jobsFor: () => [{ job: { ...job, evalBars: coinEval }, meta: null }],
+        });
+        rows = res.map(({ symbol: sym, out }) => toRow(sym, sym.replace(/USDT$/, ""), out));
+      }
+      setCompare((prev) => ({ ...prev, [mode]: { key, rows } }));
     } catch (err) {
       if (!(err instanceof AbortedError)) setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -454,7 +483,9 @@ export default function KlinesPage() {
         compareCtrl.current = null;
       }
     }
-  }, [selectedFiles, symbol, def, params, config, compareKey, setError]);
+    // compareKeys is derived from the values below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareMode, selectedFiles, batchCoins, symbol, interval, coinBars, coinEval, def, params, config, data.csvFiles, filesKey, setError]);
   const cancelCompare = useCallback(() => compareCtrl.current?.abort(), []);
 
   // Started from the data sheet: run once the new selection / source is in state
@@ -540,7 +571,6 @@ export default function KlinesPage() {
     <div className="min-h-dvh bg-background pb-[calc(4rem+env(safe-area-inset-bottom))] text-foreground lg:pb-0">
       <TopBar
         symbol={symbol}
-        onSymbol={setSymbol}
         interval={interval}
         onInterval={setInterval}
         lastClose={lastClose}
@@ -548,6 +578,7 @@ export default function KlinesPage() {
         barCount={evalBars ?? bars.length}
         loading={data.loading}
         onOpenData={() => openData()}
+        onOpenSymbol={() => setSymOpen("single")}
       />
 
       {data.error && (
@@ -678,19 +709,30 @@ export default function KlinesPage() {
               onSendToBot={sendToBot}
               sentPresetId={sentPreset?.key === botKey ? sentPreset.id : null}
             />
-            <FileCompare
+            <MultiCompare
               strategyName={def.name}
-              files={selectedFiles}
-              allFiles={data.csvFiles}
-              rows={compare?.rows ?? null}
+              mode={compareMode}
+              onMode={setCompareMode}
+              coinCount={batchCoins.length}
+              fileCount={selectedFiles.length}
+              coinScope={`${interval} · ${coinEval.toLocaleString()} แท่งล่าสุดต่อเหรียญ${strategyWarmup ? ` (+ อุ่นเครื่อง ${strategyWarmup.toLocaleString()})` : ""}${limit > MAX_COIN_EVAL ? ` · จำกัด ${MAX_COIN_EVAL.toLocaleString()} แท่ง` : ""}`}
+              rows={compare[compareMode]?.rows ?? null}
               running={compareRunning}
               progress={compareProgress}
-              stale={!!compare && compare.key !== compareKey}
-              activeFile={activeFile}
+              stale={!!compare[compareMode] && compare[compareMode]!.key !== compareKeys[compareMode]}
+              activeKey={compareMode === "files" ? activeFile : activeFile ? null : symbol}
               onRun={() => void runCompare()}
               onCancel={cancelCompare}
-              onPickFiles={() => openData("csv")}
-              onLoadFile={loadFileToChart}
+              onSelect={() => (compareMode === "files" ? openData("csv") : setSymOpen("multi"))}
+              onOpen={(key) => {
+                if (compareMode === "files") {
+                  const f = data.csvFiles.find((x) => x.file === key);
+                  if (f) loadFileToChart(f);
+                } else {
+                  setSymbol(key);
+                }
+                if (!isDesktop) setMobileTab("chart");
+              }}
             />
           </section>
           <section className={sideVis("ranking")}>
@@ -786,6 +828,18 @@ export default function KlinesPage() {
         favorites={favorites}
         onToggleFavorite={toggleFavorite}
       />
+      <SymbolPicker
+        key={`symbols-${symOpen ?? "closed"}`}
+        open={symOpen !== null}
+        onClose={() => setSymOpen(null)}
+        symbol={symbol}
+        onPick={setSymbol}
+        selected={batchCoins}
+        onSelected={setBatchCoins}
+        startMulti={symOpen === "multi"}
+        onTest={() => { setCompareMode("coins"); setSideTab("strategy"); setMobileTab("strategy"); setAutoRun("compare"); }}
+        barsPerCoin={coinBars}
+      />
       <DataSheet
         key={dataOpen ? "open" : "closed"}
         open={dataOpen}
@@ -803,7 +857,7 @@ export default function KlinesPage() {
         selected={batchFiles}
         onSelect={setBatchFiles}
         onRankFiles={() => { setRankSource("files"); goRanking(); setAutoRun("rank"); }}
-        onCompareFiles={() => { setSideTab("strategy"); setMobileTab("strategy"); setAutoRun("compare"); }}
+        onCompareFiles={() => { setCompareMode("files"); setSideTab("strategy"); setMobileTab("strategy"); setAutoRun("compare"); }}
         loadedAt={data.loadedAt}
         loading={data.loading}
         progress={data.progress}
