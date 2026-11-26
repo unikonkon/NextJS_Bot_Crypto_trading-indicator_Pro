@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
@@ -17,8 +17,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Crypto Trading Indicator",
-  description: "Binance Klines data for Trading Indicators & Backtest",
+  title: { default: "indicators", template: "%s · indicators" },
+  applicationName: "indicators",
+  description: "ทดสอบย้อนหลังและจัดอันดับ indicator เทรดคริปโตด้วยข้อมูลแท่งเทียน Binance",
+  appleWebApp: { capable: true, title: "indicators", statusBarStyle: "black-translucent" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0e16",
 };
 
 export default function RootLayout({

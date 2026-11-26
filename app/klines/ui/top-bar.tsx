@@ -30,7 +30,11 @@ export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, chan
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 lg:px-4">
-        <span className="hidden text-sm font-semibold tracking-tight xl:block">Klines Lab</span>
+        <span className="hidden items-center gap-2 text-sm font-semibold tracking-tight xl:flex">
+          {/* eslint-disable-next-line @next/next/no-img-element -- tiny static SVG, no optimisation needed */}
+          <img src="/icon.svg" alt="" width={22} height={22} className="size-[22px]" />
+          indicators
+        </span>
 
         {/* Symbol */}
         <button type="button" onClick={() => setSymOpen(true)} className="flex min-w-0 items-center gap-2 px-1 py-1 hover:bg-muted" aria-label="เลือกคู่เหรียญ">
