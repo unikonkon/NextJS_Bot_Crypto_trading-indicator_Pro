@@ -8,7 +8,7 @@ import { toBars } from "@/lib/engine/math";
 import { detectTfMinutes, getIndicator, htfApplies, htfIndicator, htfIndicatorWarmup, htfWarmupBars, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
 import { htfTrend, normalizeHtf } from "@/lib/engine/htf";
 import { getPool, AbortedError } from "@/lib/engine/worker/pool";
-import { DEFAULT_CONFIG, HTF_INTERVALS, HTF_LABELS, HTF_MINUTES, type BacktestConfig, type BacktestResult, type BacktestSummary, type Bars, type HtfInterval, type IndicatorDef, type PanePlot, type Params } from "@/lib/engine/types";
+import { DEFAULT_CONFIG, HTF_INTERVALS, HTF_LABELS, HTF_MINUTES, type BacktestConfig, type BacktestResult, type BacktestSummary, type Bars, type Trade, type HtfInterval, type IndicatorDef, type PanePlot, type Params } from "@/lib/engine/types";
 import { useKlineData } from "./lib/use-kline-data";
 import { useHtfSets, type HtfWant } from "./lib/use-htf-data";
 import { useLocalState } from "./lib/use-local-state";
@@ -69,6 +69,7 @@ export default function KlinesPage() {
   const openData = useCallback((tab?: "latest" | "range" | "csv") => { setDataTab(tab); setDataOpen(true); }, []);
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<HTMLElement>(null);
 
   // ─── Strategy ─────────────────────────────────────────────
   const def = getIndicator(strategyId) ?? listIndicators()[0];
@@ -249,6 +250,21 @@ export default function KlinesPage() {
 
   // A result only belongs to the bars it was computed on
   const result = single && single.bars === bars ? single.result : null;
+
+  // ─── Trade picked in the history → shown on the chart ─────
+  const [focus, setFocus] = useState<{ trade: Trade; seq: number } | null>(null);
+  // Only while it is still one of the current result's trades
+  const focusNow = focus && result?.trades.includes(focus.trade) ? focus : null;
+  const pickTrade = useCallback((trade: Trade) => {
+    setFocus((f) => ({ trade, seq: (f?.seq ?? 0) + 1 }));
+    setShowTrades(true);
+    setMobileTab("chart");
+    // Bring the chart into view: mobile → top of the chart tab; desktop → the chart above the results
+    requestAnimationFrame(() => {
+      if (isDesktop) chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      else window.scrollTo({ top: 0 });
+    });
+  }, [setShowTrades, isDesktop]);
 
   // ─── Ranking (many indicators in parallel, same evaluation window) ──
   const [rank, setRank] = useState<{ rows: RankRow[]; bars: Bars; configKey: string; grid: boolean; files: boolean } | null>(null);
@@ -532,7 +548,7 @@ export default function KlinesPage() {
       <main className="mx-auto max-w-[1600px] lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-4 lg:p-4">
         {/* ═══ Left: chart + results ═══ */}
         <div className="min-w-0 space-y-4">
-          <section className={leftVis("chart")}>
+          <section ref={chartRef} className={cn(leftVis("chart"), "scroll-mt-16")}>
             <div className="border-b bg-card lg:border">
               {/* Chart toolbar */}
               <div className="flex items-center gap-1.5 overflow-x-auto border-b px-2 py-1.5 [scrollbar-width:none]">
@@ -566,7 +582,7 @@ export default function KlinesPage() {
               </div>
 
               {bars.length > 0 ? (
-                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} extraOverlays={htfOverlays} extraPanes={htfPanes} />
+                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} extraOverlays={htfOverlays} extraPanes={htfPanes} focus={focusNow} />
               ) : (
                 <div className="grid h-[320px] place-items-center text-xs text-muted-foreground lg:h-[460px]">
                   {data.loading ? `กำลังโหลด ${symbol} ${interval}…${data.progress ? ` ${data.progress.toLocaleString()} แท่ง` : ""}` : "ยังไม่มีข้อมูล — กดปุ่ม “ข้อมูล” ด้านบน"}
@@ -601,7 +617,7 @@ export default function KlinesPage() {
           </section>
 
           <section ref={resultsRef} className={cn(leftVis("results"), "scroll-mt-16 px-3 py-3 lg:p-0")}>
-            <ResultsPanel result={result} def={def} mode={config.mode} bars={bars} running={running} />
+            <ResultsPanel result={result} def={def} mode={config.mode} bars={bars} running={running} onPickTrade={pickTrade} picked={focusNow?.trade ?? null} />
           </section>
         </div>
 

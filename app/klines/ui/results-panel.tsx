@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { TrendUp, TrendDown, CaretLeft, CaretRight, CaretDown } from "@phosphor-icons/react";
+import { TrendUp, TrendDown, CaretLeft, CaretRight, CaretDown, ChartLineUp } from "@phosphor-icons/react";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 import { getIndicator } from "@/lib/engine/registry";
@@ -16,6 +16,10 @@ interface Props {
   mode: TradeMode;
   bars: Bars;
   running: boolean;
+  /** Show a trade on the chart */
+  onPickTrade?: (t: Trade) => void;
+  /** Trade currently shown on the chart */
+  picked?: Trade | null;
 }
 
 const MODE_LABEL: Record<TradeMode, string> = { long: "ขาขึ้น (Long)", short: "ขาลง (Short)", both: "ทั้งสองทาง" };
@@ -54,7 +58,7 @@ function SideCard({ side, s }: { side: "long" | "short"; s: SideStats }) {
 
 const PAGE = 20;
 
-function TradeList({ trades }: { trades: Trade[] }) {
+function TradeList({ trades, onPick, picked }: { trades: Trade[]; onPick?: (t: Trade) => void; picked?: Trade | null }) {
   const hasNotes = trades.some((t) => t.entryNote || t.exitNote);
   const [filter, setFilter] = useState<"all" | "long" | "short">("all");
   const [page, setPage] = useState(0);
@@ -92,7 +96,9 @@ function TradeList({ trades }: { trades: Trade[] }) {
       {/* Mobile: cards */}
       <ul className="divide-y border md:hidden">
         {rows.map((t, i) => (
-          <li key={`${t.entryIdx}-${i}`} className="flex items-center gap-3 px-3 py-2">
+          <li key={`${t.entryIdx}-${i}`}>
+            <button type="button" onClick={() => onPick?.(t)} title="ดูเทรดนี้บนกราฟ"
+              className={cn("flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40", t === picked && "bg-muted/60 ring-1 ring-inset ring-primary")}>
             <span className={cn("grid size-7 shrink-0 place-items-center text-white", t.side === "long" ? "bg-emerald-500" : "bg-red-500")}>
               {t.side === "long" ? <TrendUp size={14} weight="bold" /> : <TrendDown size={14} weight="bold" />}
             </span>
@@ -102,6 +108,8 @@ function TradeList({ trades }: { trades: Trade[] }) {
               {t.exitNote && <p className="truncate text-foreground/70" title={`${t.entryNote ?? ""}\n${t.exitNote}`}>{t.exitNote}</p>}
             </div>
             <span className={cn("shrink-0 text-xs font-semibold tabular-nums", toneClass(t.pnlPct))}>{fmtPct(t.pnlPct)}</span>
+            <ChartLineUp size={13} className="shrink-0 text-muted-foreground" />
+            </button>
           </li>
         ))}
       </ul>
@@ -124,7 +132,8 @@ function TradeList({ trades }: { trades: Trade[] }) {
           </thead>
           <tbody className="divide-y">
             {rows.map((t, i) => (
-              <tr key={`${t.entryIdx}-${i}`} className="hover:bg-muted/30">
+              <tr key={`${t.entryIdx}-${i}`} onClick={() => onPick?.(t)} title="ดูเทรดนี้บนกราฟ"
+                className={cn("cursor-pointer hover:bg-muted/40", t === picked && "bg-muted/60 outline outline-1 -outline-offset-1 outline-primary")}>
                 <td className="px-2 py-1.5">
                   <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-white", t.side === "long" ? "bg-emerald-500" : "bg-red-500")}>
                     {t.side === "long" ? "LONG" : "SHORT"}
@@ -153,7 +162,7 @@ function TradeList({ trades }: { trades: Trade[] }) {
   );
 }
 
-export function ResultsPanel({ result, def, mode, bars, running }: Props) {
+export function ResultsPanel({ result, def, mode, bars, running, onPickTrade, picked }: Props) {
   const [showRaw, setShowRaw] = useState(false);
 
   const start = result?.startIndex ?? 0;
@@ -264,8 +273,11 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
 
       {/* Trades */}
       <div className="space-y-2">
-        <h3 className="text-xs font-semibold">ประวัติการเทรด</h3>
-        <TradeList key={r.trades.length + mode} trades={r.trades} />
+        <h3 className="flex items-baseline justify-between gap-2 text-xs font-semibold">
+          ประวัติการเทรด
+          {onPickTrade && <span className="text-[10px] font-normal text-muted-foreground">แตะรายการเพื่อดูบนกราฟ</span>}
+        </h3>
+        <TradeList key={r.trades.length + mode} trades={r.trades} onPick={onPickTrade} picked={picked} />
       </div>
 
       {/* Raw data */}

@@ -10,6 +10,7 @@ import {
   LineSeries,
   CrosshairMode,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
@@ -41,6 +42,8 @@ interface Props {
   extraOverlays?: SeriesPlot[];
   /** Extra thin panes under the price (e.g. the higher-timeframe direction strip) */
   extraPanes?: PanePlot[];
+  /** Trade picked in the history: scroll to it and mark its entry / exit (`seq` re-focuses the same trade) */
+  focus?: { trade: Trade; seq: number } | null;
 }
 
 const UP = "#10b981";
@@ -108,7 +111,7 @@ function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number) {
     `<b style="color:${tone}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</b>`;
 }
 
-export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays, extraPanes }: Props) {
+export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays, extraPanes, focus }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -117,6 +120,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const indicatorSeriesRef = useRef<ISeriesApi<SeriesType>[]>([]);
   const fittedBarsRef = useRef<Bars | null>(null);
+  const focusLinesRef = useRef<IPriceLine[]>([]);
   const barsRef = useRef(bars);
   useEffect(() => {
     barsRef.current = bars;
@@ -183,6 +187,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
       candleRef.current = null;
       volRef.current = null;
       markersRef.current = null;
+      focusLinesRef.current = [];
       indicatorSeriesRef.current = [];
       fittedBarsRef.current = null;
     };
@@ -282,21 +287,25 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     const markers: SeriesMarker<Time>[] = [];
     if (showTrades && trades && trades.length) {
       const withText = trades.length <= 250;
+      const picked = focus?.trade;
       for (const t of trades) {
         const long = t.side === "long";
+        const on = t === picked;
         markers.push({
           time: toUTC(t.entryTime),
           position: long ? "belowBar" : "aboveBar",
           color: long ? UP : DOWN,
           shape: long ? "arrowUp" : "arrowDown",
-          text: long ? "L" : "S",
+          text: on ? (long ? "เข้า Long" : "เข้า Short") : long ? "L" : "S",
+          ...(on ? { size: 2 } : {}),
         });
         markers.push({
           time: toUTC(t.exitTime),
           position: long ? "aboveBar" : "belowBar",
           color: t.pnlPct >= 0 ? UP : DOWN,
           shape: "circle",
-          text: withText ? `${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct.toFixed(1)}%` : undefined,
+          text: withText || on ? `${on ? "ออก " : ""}${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct.toFixed(1)}%` : undefined,
+          ...(on ? { size: 2 } : {}),
         });
       }
     } else {
@@ -314,7 +323,40 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     api.setMarkers(markers);
-  }, [trades, showTrades, plots, bars]);
+  }, [trades, showTrades, plots, bars, focus]);
+
+  // ─── Focus a trade picked in the history ──────────────────
+  useEffect(() => {
+    const chart = chartRef.current, candle = candleRef.current, el = containerRef.current;
+    if (!chart || !candle || !el) return;
+    for (const l of focusLinesRef.current) candle.removePriceLine(l);
+    focusLinesRef.current = [];
+    const t = focus?.trade;
+    if (!t || t.entryIdx < 0 || t.exitIdx >= bars.length) return;
+
+    const long = t.side === "long";
+    const win = t.pnlPct >= 0;
+    focusLinesRef.current = [
+      candle.createPriceLine({ price: t.entryPrice, color: long ? UP : DOWN, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: long ? "เข้า L" : "เข้า S" }),
+      candle.createPriceLine({ price: t.exitPrice, color: win ? UP : DOWN, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `ออก ${win ? "+" : ""}${t.pnlPct.toFixed(1)}%` }),
+    ];
+
+    // Show the whole trade with some bars around it (at least a readable window)
+    const len = t.exitIdx - t.entryIdx;
+    const pad = Math.max(compact ? 20 : 30, Math.round(len * 0.4));
+    const range = { from: t.entryIdx - pad, to: t.exitIdx + pad };
+    // On mobile the chart tab may still be hidden (width 0) — wait until it is laid out
+    let tries = 0;
+    let raf = 0;
+    const apply = () => {
+      if (el.clientWidth === 0 && tries++ < 60) { raf = requestAnimationFrame(apply); return; }
+      chart.timeScale().setVisibleLogicalRange(range);
+      // once more after the resize observer has applied the new width
+      raf = requestAnimationFrame(() => chart.timeScale().setVisibleLogicalRange(range));
+    };
+    apply();
+    return () => cancelAnimationFrame(raf);
+  }, [focus, bars, compact]);
 
   return (
     <div className="relative w-full" style={{ height }}>
