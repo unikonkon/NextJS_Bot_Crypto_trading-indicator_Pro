@@ -32,6 +32,19 @@ export function fmtDate(ts: number, withYear = false): string {
   });
 }
 
+/** Length of a time span: "45 วัน", "1.5 ปี" */
+export function fmtDays(ms: number): string {
+  const d = Math.round(ms / 86_400_000);
+  return d >= 360 ? `${(d / 365).toFixed(d % 365 < 5 || d % 365 > 360 ? 0 : 1)} ปี` : `${d} วัน`;
+}
+
+/** Storage size: "850 KB", "4.1 MB", "119.6 GB" */
+export function fmtBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e11 ? 0 : 1)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1)} MB`;
+  return `${Math.max(1, Math.round(n / 1e3))} KB`;
+}
+
 export function toneClass(v: number): string {
   return v > 0 ? "text-up" : v < 0 ? "text-down" : "text-muted-foreground";
 }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Minus, Plus, Warning, ChartLineUp, LockSimple, Info, Funnel, X, Robot } from "@phosphor-icons/react";
+import { BookmarkSimple, CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Minus, Plus, Warning, ChartLineUp, LockSimple, Info, Funnel, X, Robot } from "@phosphor-icons/react";
 import { Segmented } from "@/components/ui/segmented";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -47,6 +47,10 @@ interface Props {
   onSendToBot?: () => void;
   /** Id of the preset just sent (shows a link to the bot) */
   sentPresetId?: string | null;
+  /** Save this strategy + settings + result to the local database (listed on /saved) */
+  onSave?: () => void;
+  /** "saved": this exact setup is in the list · "just": saved a moment ago */
+  saved?: "saved" | "just" | null;
 }
 
 export const MODE_OPTIONS = [
@@ -269,7 +273,7 @@ function StopField({ label, rule, onChange, tone }: { label: string; rule: StopR
 }
 
 export function StrategyPanel(props: Props) {
-  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults, htf, onClearHtf, onFindHtf, onSendToBot, sentPresetId } = props;
+  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults, htf, onClearHtf, onFindHtf, onSendToBot, sentPresetId, onSave, saved } = props;
   const paramsChanged = def.params.some((p) => !p.locked && params[p.key] !== p.default);
   const noExit = !config.exitOnOpposite && config.stopLoss.kind === "none" && config.takeProfit.kind === "none" && config.trailing.kind === "none";
   const engine = engineOf(def, params);
@@ -419,10 +423,24 @@ export function StrategyPanel(props: Props) {
                 </p>
               )}
             </div>
+            {onSave && (
+              <Button variant="outline" size="lg" onClick={onSave} disabled={!result || running} className={cn(saved && "text-primary")}
+                title={saved ? "บันทึกผลล่าสุดทับรายการเดิม" : "บันทึก indicator + ค่าที่ตั้ง + ผลทดสอบนี้ลงฐานข้อมูลในเครื่อง"}>
+                <BookmarkSimple size={14} weight={saved ? "fill" : "regular"} /> {saved ? "บันทึกแล้ว" : "บันทึก"}
+              </Button>
+            )}
             <Button variant="outline" size="lg" onClick={onShowResults} disabled={!result}>
               <ChartLineUp size={14} /> ดูผล
             </Button>
           </div>
+        )}
+        {saved === "just" && (
+          <p className="mt-2 flex items-center gap-2 border-t pt-2 text-[10px] text-up">
+            <span className="min-w-0 flex-1">บันทึกลงฐานข้อมูลในเครื่องแล้ว</span>
+            <Link href="/saved" className="inline-flex shrink-0 items-center gap-0.5 font-medium text-foreground underline-offset-2 hover:underline">
+              ดูที่บันทึกไว้ <CaretRight size={11} />
+            </Link>
+          </p>
         )}
         {onSendToBot && (
           <div className="mt-2 flex items-center gap-2 border-t pt-2">

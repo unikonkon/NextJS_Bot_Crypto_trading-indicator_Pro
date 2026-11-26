@@ -1,16 +1,20 @@
 "use client";
 
-import { useState } from "react";
-import { Check, DownloadSimple, FileCsv, Files, Play, Ranking, Stop, Warning } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Check, DownloadSimple, FileCsv, Files, HardDrives, Play, Ranking, Stop, Warning } from "@phosphor-icons/react";
 import { Sheet } from "@/components/ui/sheet";
 import { Segmented } from "@/components/ui/segmented";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { INTERVAL_MINUTES, type Interval } from "@/lib/types/kline";
 import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import type { DataSource } from "../lib/use-kline-data";
-import { fmtDate, fmtPct, fmtPrice, toneClass } from "../lib/format";
+import { BYTES_PER_BAR, KEEP_BARS_KEY, listStoredBars, storageInfo, type StorageInfo, type StoreUse, type StoredBarsMeta } from "../lib/kline-store";
+import { useLocalState } from "../lib/use-local-state";
+import { fmtBytes, fmtDate, fmtDays, fmtPct, fmtPrice, toneClass } from "../lib/format";
 
 const LIMITS = [200, 500, 1000, 2000, 5000, 10_000, 20_000, 40_000];
 
@@ -50,10 +54,6 @@ function toLocalInput(ms: number): string {
 function fmtSize(bytes: number): string {
   return bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
-function fmtDays(ms: number): string {
-  const d = Math.round(ms / 86_400_000);
-  return d >= 360 ? `${(d / 365).toFixed(d % 365 < 5 || d % 365 > 360 ? 0 : 1)} ปี` : `${d} วัน`;
-}
 
 interface Props {
   open: boolean;
@@ -72,7 +72,8 @@ interface Props {
   progress: number | null;
   csvFiles: CsvFileInfo[];
   onLatest: (limit: number) => void;
-  onRange: (start: number, end: number) => void;
+  /** `toNow`: no end was given — the range runs up to the present */
+  onRange: (start: number, end: number, toNow: boolean) => void;
   onCsv: (file: CsvFileInfo) => void;
   onCancel: () => void;
   onDownload: () => void;
@@ -87,6 +88,8 @@ interface Props {
   onSelect: (files: string[]) => void;
   onRankFiles: () => void;
   onCompareFiles: () => void;
+  /** How the bars on screen were obtained when the local database was used */
+  storeUse: StoreUse | null;
 }
 
 const BIG_FILE = 100_000;
@@ -99,6 +102,19 @@ export function DataSheet(p: Props) {
   const [end, setEnd] = useState("");
   // The sheet remounts on every open, so "now" for the estimate is fresh enough
   const [openedAt] = useState(() => Date.now());
+  // Bars stored in this browser's database so the next visit only downloads what is new
+  const [keepOn, setKeepOn] = useLocalState(KEEP_BARS_KEY, true);
+  const [stored, setStored] = useState<{ list: StoredBarsMeta[]; space: StorageInfo | null }>({ list: [], space: null });
+  useEffect(() => {
+    let alive = true;
+    Promise.all([listStoredBars(), storageInfo()])
+      .then(([list, space]) => { if (alive) setStored({ list, space }); })
+      .catch(() => { /* no local database */ });
+    return () => { alive = false; };
+  }, []);
+  const storedHere = stored.list.filter((m) => m.symbol === p.symbol);
+  const storedCoins = new Set(stored.list.map((m) => m.symbol)).size;
+  const storedBytes = stored.list.reduce((n, m) => n + m.bars, 0) * BYTES_PER_BAR;
 
   const tfMs = (INTERVAL_MINUTES[p.interval] ?? 60) * 60_000;
   const startMs = start ? new Date(start).getTime() : NaN;
@@ -153,6 +169,12 @@ export function DataSheet(p: Props) {
                 โหลดจริง {p.barCount.toLocaleString()} แท่ง (รวมอุ่นเครื่อง) · {fmtDate(p.firstTime, true)} → {fmtDate(p.lastTime, true)}
                 {p.loadedAt && ` · โหลดเมื่อ ${p.loadedAt.toLocaleTimeString()}`}
               </p>
+              {p.storeUse && p.source?.kind !== "csv" && (
+                <p>
+                  <HardDrives size={11} className="mr-1 inline align-[-1px]" />
+                  ใช้ข้อมูลในเครื่อง {p.storeUse.reused.toLocaleString()} แท่ง · ดึงใหม่ {p.storeUse.fetched.toLocaleString()} แท่ง
+                </p>
+              )}
               {p.firstPrice !== null && p.lastPrice !== null && (
                 <p>
                   ราคา {fmtPrice(p.firstPrice)} → {fmtPrice(p.lastPrice)}{" "}
@@ -250,10 +272,40 @@ export function DataSheet(p: Props) {
               </div>
             ) : (
               <Button size="lg" className="h-11 w-full text-sm" disabled={!start || estBars === 0 || tooMany || p.loading}
-                onClick={() => p.onRange(startMs, end ? endMs : Date.now())}>
+                onClick={() => p.onRange(startMs, end ? endMs : Date.now(), !end)}>
                 {presetLabel ? `ดึงข้อมูล${presetLabel === "ทั้งหมด" ? "ทั้งหมด" : ` ${presetLabel} ล่าสุด`}` : "ดึงข้อมูลย้อนหลัง"}
               </Button>
             )}
+          </div>
+        )}
+
+        {tab !== "csv" && (
+          <div className="space-y-2 border px-3 py-2.5">
+            <div className="flex items-start gap-3">
+              <Switch checked={keepOn} onChange={setKeepOn} aria-label="เก็บข้อมูลแท่งเทียนไว้ในเครื่อง" className="mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium">เก็บข้อมูลแท่งเทียนไว้ในเครื่อง</p>
+                <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
+                  เก็บในฐานข้อมูลของเบราว์เซอร์ แยกตามเหรียญและช่วงเวลา — เปิดครั้งถัดไปดึงเฉพาะแท่งใหม่มาต่อ · เก็บได้หลายเหรียญจนกว่าพื้นที่จะเต็ม ไม่ลบเอง
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1 border-t pt-2 text-[10px] tabular-nums text-muted-foreground">
+              <p className="flex flex-wrap items-baseline gap-x-1.5">
+                <HardDrives size={11} className="self-center" />
+                <b className="font-semibold text-foreground">{p.symbol}</b>
+                {storedHere.length > 0
+                  ? storedHere.map((m) => <span key={m.interval}>{m.interval} {m.bars.toLocaleString()} แท่ง</span>)
+                  : <span>ยังไม่มีข้อมูลที่เก็บไว้</span>}
+              </p>
+              <p className="flex flex-wrap items-baseline gap-x-1.5">
+                <span>
+                  เก็บอยู่ {storedCoins} เหรียญ · ≈ {fmtBytes(storedBytes)}
+                  {stored.space && ` · พื้นที่เหลือ ${fmtBytes(Math.max(0, stored.space.quota - stored.space.usage))}`}
+                </span>
+                <Link href="/saved?tab=data" className="ml-auto font-medium text-foreground underline-offset-2 hover:underline">จัดการ / ลบ</Link>
+              </p>
+            </div>
           </div>
         )}
 

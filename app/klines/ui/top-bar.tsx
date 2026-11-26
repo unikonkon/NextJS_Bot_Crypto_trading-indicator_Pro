@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CaretDown, Database, CircleNotch } from "@phosphor-icons/react";
+import { BookmarkSimple, CaretDown, Database, CircleNotch } from "@phosphor-icons/react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,13 @@ import { INTERVALS, type Interval } from "@/lib/types/kline";
 import { fmtPct, fmtPrice, toneClass } from "../lib/format";
 
 const QUICK_INTERVALS: Interval[] = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"];
+
+/** 40000 → "40K", 2192 → "2.2K", 500 → "500" */
+function compactBars(n: number): string {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return `${k >= 100 || Number.isInteger(k) ? Math.round(k) : k.toFixed(1)}K`;
+}
 
 interface Props {
   symbol: string;
@@ -71,11 +78,12 @@ export function TopBar({ symbol, interval, onInterval, lastClose, changePct, bar
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button variant="outline" size="lg" onClick={onOpenData} className="gap-1.5 px-2 sm:px-2.5" aria-label="ข้อมูลแท่งเทียน">
-            {loading ? <CircleNotch size={14} className="animate-spin" /> : <Database size={14} />}
+            {/* The icon goes on very narrow phones (< 380px) so the row still fits */}
+            {loading ? <CircleNotch size={14} className="animate-spin" /> : <Database size={14} className="max-[379px]:hidden" />}
             {barCount > 0 ? (
               <>
-                {/* Phone: "40K" so the row keeps room for Binance Trading */}
-                <span className="tabular-nums sm:hidden">{barCount >= 10_000 ? `${Math.round(barCount / 1000)}K` : barCount.toLocaleString()}</span>
+                {/* Phone: "40K" / "2.2K" so the row keeps room for the links */}
+                <span className="tabular-nums sm:hidden">{compactBars(barCount)}</span>
                 <span className="hidden tabular-nums sm:inline">{barCount.toLocaleString()} แท่ง</span>
               </>
             ) : (
@@ -83,12 +91,21 @@ export function TopBar({ symbol, interval, onInterval, lastClose, changePct, bar
             )}
           </Button>
           <Link
+            href="/saved"
+            className="inline-flex h-9 min-w-9 items-center justify-center gap-1 whitespace-nowrap border px-2 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground md:px-2.5"
+            aria-label="กลยุทธ์ที่บันทึกไว้"
+            title="กลยุทธ์ที่บันทึกไว้ · ตั้งค่าหน้าแรก"
+          >
+            <BookmarkSimple size={14} />
+            <span className="hidden md:inline">ที่บันทึกไว้</span>
+          </Link>
+          <Link
             href="/trading/Binance"
             className="inline-flex h-9 items-center whitespace-nowrap border px-2 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground sm:px-2.5"
           >
-            {/* Very narrow phones (< 380px) keep the header to two rows with the short label */}
-            <span className="min-[380px]:hidden">Binance</span>
-            <span className="hidden min-[380px]:inline">Binance Trading</span>
+            {/* Phones keep the header to two rows with the short label */}
+            <span className="min-[440px]:hidden">Binance</span>
+            <span className="hidden min-[440px]:inline">Binance Trading</span>
           </Link>
           <ThemeToggle />
         </div>

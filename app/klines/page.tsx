@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
+import Link from "next/link";
+import { BookmarkSimple, CaretRight, ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { INTERVAL_MINUTES, INTERVALS, type Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
@@ -27,6 +28,7 @@ import { TradeNav } from "./ui/trade-nav";
 import { fileTfMinutes, runOnCoins, runOnFiles } from "./lib/batch";
 import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import { makePreset, savePreset } from "@/lib/trading/presets";
+import { listSaved, makeSaved, onSavedChange, putSaved, readStartup, setupKey, startupDone, type SavedData } from "@/lib/saved/strategies";
 
 type MobileTab = "chart" | "strategy" | "results" | "ranking";
 
@@ -65,9 +67,8 @@ export default function KlinesPage() {
   const [symOpen, setSymOpen] = useState<null | "single" | "multi">(null);
   const [rankSource, setRankSource] = useLocalState<RankSource>("klines.rankSource", "chart");
 
-  // Wait one commit so persisted values are loaded before the first fetch
+  // Set once the persisted values are loaded and the startup strategy (if any) is applied — the first fetch waits for it
   const [ready, setReady] = useState(false);
-  useEffect(() => setReady(true), []);
 
   // ─── UI state ─────────────────────────────────────────────
   const [mobileTab, setMobileTab] = useState<MobileTab>("chart");
@@ -126,7 +127,7 @@ export default function KlinesPage() {
   useEffect(() => { desiredRef.current = desiredTotal; }, [desiredTotal]);
   const requestedRef = useRef("");
 
-  /** Market switched to match a CSV file being loaded — that change must not refetch from Binance */
+  /** Market switched to match data that is loaded separately (a CSV file, a saved range) — that change must not fetch "latest" */
   const csvMarketRef = useRef("");
 
   // Reload when the market changes
@@ -135,7 +136,7 @@ export default function KlinesPage() {
     if (csvMarketRef.current === `${symbol}|${interval}`) { csvMarketRef.current = ""; return; }
     csvMarketRef.current = "";
     const src = sourceRef.current;
-    if (src?.kind === "range") { loadRange(symbol, interval, src.start, src.end); return; }
+    if (src?.kind === "range") { loadRange(symbol, interval, src.start, src.toNow ? Date.now() : src.end, src.toNow); return; }
     requestedRef.current = `${symbol}|${interval}|${desiredRef.current}`;
     loadLatest(symbol, interval, desiredRef.current);
   }, [ready, symbol, interval, loadLatest, loadRange]);
@@ -521,6 +522,36 @@ export default function KlinesPage() {
     loadCsv(f.file);
   }, [symbol, interval, setSymbol, setInterval, loadCsv]);
 
+  // ─── Startup: the strategy opened from /saved, or the one chosen to show first ──
+  useEffect(() => {
+    let alive = true;
+    readStartup().catch(() => null).then((e) => {
+      if (!alive) return;
+      startupDone();
+      if (e && !getIndicator(e.indicatorId)) {
+        setError(`เปิด “${e.name}” ไม่ได้ — ไม่พบ indicator ${e.indicatorName} ในระบบแล้ว`);
+      } else if (e) {
+        const tf = (INTERVALS as readonly string[]).includes(e.interval) ? e.interval : "1h";
+        setStrategyId(e.indicatorId);
+        setParamsById((prev) => ({ ...prev, ...Object.fromEntries(e.overlays.map((o) => [o.id, o.params])), [e.indicatorId]: e.params }));
+        setConfig({ ...DEFAULT_CONFIG, ...e.config });
+        setOverlayIds(e.overlays.map((o) => o.id).filter((id) => !!getIndicator(id)));
+        if (e.data.kind === "latest") {
+          setLimit(Math.min(MAX_BARS, Math.max(50, Math.round(e.data.limit))));
+        } else {
+          // Loaded right here, so the market effect below must not fetch "latest" on top
+          csvMarketRef.current = `${e.symbol}|${tf}`;
+          if (e.data.kind === "csv") loadCsv(e.data.file);
+          else loadRange(e.symbol, tf, e.data.start, e.data.toNow ? Date.now() : e.data.end, e.data.toNow);
+        }
+        setSymbol(e.symbol);
+        setInterval(tf);
+      }
+      setReady(true);
+    });
+    return () => { alive = false; };
+  }, [setError, setStrategyId, setParamsById, setConfig, setOverlayIds, setLimit, setSymbol, setInterval, loadCsv, loadRange]);
+
   /** Use a ranking row on the chart: its strategy and its filter (or no filter) */
   const applyFromRanking = useCallback((row: RankRow) => {
     if (row.file && row.file !== activeFile) {
@@ -564,6 +595,41 @@ export default function KlinesPage() {
     savePreset(p);
     setSentPreset({ id: p.id, key: botKey });
   }, [def, params, config, csvSymbol, symbol, interval, result, bars.time, botKey]);
+
+  // ─── Save the strategy + its result to the local database (listed on /saved) ──
+  const savedData = useMemo<SavedData>(() => {
+    const src = data.source;
+    if (src?.kind === "range") return { kind: "range", start: src.start, end: src.end, toNow: !!src.toNow };
+    if (src?.kind === "csv") return { kind: "csv", file: src.file };
+    return { kind: "latest", limit };
+  }, [data.source, limit]);
+  const saveKey = setupKey({ indicatorId: def.id, params, config, symbol: csvSymbol ?? symbol, interval, data: savedData });
+  /** setupKey → id of everything saved, to mark the current setup as saved */
+  const [savedKeys, setSavedKeys] = useState<Record<string, string>>({});
+  const [justSaved, setJustSaved] = useState<string | null>(null);
+  useEffect(() => {
+    const load = () => listSaved()
+      .then((list) => setSavedKeys(Object.fromEntries(list.map((x) => [setupKey(x), x.id]))))
+      .catch(() => { /* no local database — saving reports the error */ });
+    load();
+    return onSavedChange(load);
+  }, []);
+  const saveStrategy = useCallback(async () => {
+    if (!result) return;
+    try {
+      const entry = await putSaved(makeSaved({
+        indicatorId: def.id, indicatorName: def.name, params, config,
+        symbol: csvSymbol ?? symbol, interval, data: savedData,
+        overlays: chartIndicators.filter((c) => !c.isStrategy).map((c) => ({ id: c.def.id, params: c.params })),
+        result, bars,
+      }));
+      setSavedKeys((prev) => ({ ...prev, [saveKey]: entry.id }));
+      setJustSaved(saveKey);
+    } catch (err) {
+      setError(`บันทึกไม่สำเร็จ: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [result, def, params, config, csvSymbol, symbol, interval, savedData, chartIndicators, bars, saveKey, setError]);
+  const savedState = justSaved === saveKey ? "just" as const : savedKeys[saveKey] ? "saved" as const : null;
 
   const lastClose = bars.length ? bars.close[bars.length - 1] : null;
   const changePct = bars.length > 1 ? ((bars.close[bars.length - 1] - bars.close[0]) / bars.close[0]) * 100 : null;
@@ -625,6 +691,16 @@ export default function KlinesPage() {
                   <TradeNav trades={result?.trades ?? null} current={focusNow?.trade ?? null} onFocus={focusOnChart} className="hidden sm:flex" />
                   <button
                     type="button"
+                    onClick={() => void saveStrategy()}
+                    disabled={!result || running}
+                    className={cn("flex h-8 shrink-0 items-center gap-1 px-2 text-[11px] disabled:opacity-40", savedState ? "text-primary" : "text-muted-foreground hover:text-foreground")}
+                    title={savedState ? "บันทึกแล้ว — กดเพื่อบันทึกผลล่าสุดทับรายการเดิม" : "บันทึกกลยุทธ์นี้ + ผลทดสอบลงฐานข้อมูลในเครื่อง"}
+                    aria-label={savedState ? "บันทึกแล้ว — บันทึกผลล่าสุดทับ" : "บันทึกกลยุทธ์นี้"}
+                  >
+                    <BookmarkSimple size={13} weight={savedState ? "fill" : "regular"} /><span className="hidden xl:inline">{savedState ? "บันทึกแล้ว" : "บันทึก"}</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setShowTrades((v) => !v)}
                     className={cn("flex h-8 shrink-0 items-center gap-1 px-2 text-[11px]", showTrades ? "text-foreground" : "text-muted-foreground")}
                     title="แสดง/ซ่อนจุดเข้า-ออกของเทรด"
@@ -634,6 +710,17 @@ export default function KlinesPage() {
                   </button>
                 </div>
               </div>
+
+              {savedState === "just" && (
+                <p className="flex items-center gap-2 border-b bg-up/5 px-3 py-1.5 text-[11px] text-up" role="status">
+                  <BookmarkSimple size={13} weight="fill" className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">บันทึก {def.name} · {csvSymbol ?? symbol} {interval} แล้ว</span>
+                  <Link href="/saved" className="inline-flex shrink-0 items-center gap-0.5 font-medium text-foreground underline-offset-2 hover:underline">
+                    ดูที่บันทึกไว้ <CaretRight size={11} />
+                  </Link>
+                  <button type="button" onClick={() => setJustSaved(null)} aria-label="ปิด" className="grid size-6 shrink-0 place-items-center text-muted-foreground hover:text-foreground"><X size={12} /></button>
+                </p>
+              )}
 
               {bars.length > 0 ? (
                 <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} extraOverlays={htfOverlays} extraPanes={htfPanes} focus={focusNow} />
@@ -725,6 +812,8 @@ export default function KlinesPage() {
               onFindHtf={goRanking}
               onSendToBot={sendToBot}
               sentPresetId={sentPreset?.key === botKey ? sentPreset.id : null}
+              onSave={() => void saveStrategy()}
+              saved={savedState}
             />
             <MultiCompare
               strategyName={def.name}
@@ -886,7 +975,8 @@ export default function KlinesPage() {
           loadLatest(symbol, interval, total);
         }}
         warmup={neededWarmup}
-        onRange={(s, e) => loadRange(symbol, interval, s, e)}
+        onRange={(s, e, toNow) => loadRange(symbol, interval, s, e, toNow)}
+        storeUse={data.storeUse}
         onCsv={loadFileToChart}
         onCancel={data.cancel}
         onDownload={() => data.downloadCsv(`${symbol}_${interval}`)}
