@@ -2,23 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CaretDown, Database, MagnifyingGlass, CircleNotch } from "@phosphor-icons/react";
+import { CaretDown, Database, CircleNotch } from "@phosphor-icons/react";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Sheet } from "@/components/ui/sheet";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { INTERVALS, type Interval } from "@/lib/types/kline";
 import { fmtPct, fmtPrice, toneClass } from "../lib/format";
+import { SymbolPicker } from "./symbol-picker";
 
-export const POPULAR_SYMBOLS = [
-  "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-  "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
-  "LTCUSDT", "ATOMUSDT", "NEARUSDT", "APTUSDT", "ARBUSDT",
-  "OPUSDT", "SUIUSDT", "INJUSDT", "FETUSDT", "PEPEUSDT",
-];
-
-const QUICK_INTERVALS: Interval[] = ["5m", "15m", "1h", "4h", "1d"];
+const QUICK_INTERVALS: Interval[] = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"];
 
 interface Props {
   symbol: string;
@@ -34,10 +26,6 @@ interface Props {
 
 export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, changePct, barCount, loading, onOpenData }: Props) {
   const [symOpen, setSymOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const q = query.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const filtered = POPULAR_SYMBOLS.filter((s) => s.includes(q));
-  const pick = (s: string) => { onSymbol(s); setSymOpen(false); setQuery(""); };
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -96,30 +84,7 @@ export function TopBar({ symbol, onSymbol, interval, onInterval, lastClose, chan
         </div>
       </div>
 
-      <Sheet open={symOpen} onClose={() => setSymOpen(false)} title="เลือกคู่เหรียญ" description="เลือกจากรายการยอดนิยม หรือพิมพ์ชื่อคู่เหรียญ Binance">
-        <div className="space-y-3 p-4">
-          <form onSubmit={(e) => { e.preventDefault(); if (q.length >= 5) pick(q); }} className="flex gap-2">
-            <div className="relative flex-1">
-              <MagnifyingGlass size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="เช่น PEPEUSDT" className="h-10 pl-8 uppercase" autoFocus autoCapitalize="characters" />
-            </div>
-            <Button type="submit" size="lg" className="h-10" disabled={q.length < 5}>ใช้</Button>
-          </form>
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-            {filtered.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => pick(s)}
-                className={cn("h-10 border text-xs font-medium transition-colors", s === symbol ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted")}
-              >
-                {s.replace(/USDT$/, "")}<span className="opacity-50">/USDT</span>
-              </button>
-            ))}
-          </div>
-          {filtered.length === 0 && q && <p className="text-center text-[11px] text-muted-foreground">กด “ใช้” เพื่อโหลด {q}</p>}
-        </div>
-      </Sheet>
+      <SymbolPicker open={symOpen} onClose={() => setSymOpen(false)} symbol={symbol} onPick={onSymbol} />
     </header>
   );
 }
