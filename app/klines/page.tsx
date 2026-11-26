@@ -23,6 +23,7 @@ import { ResultsPanel } from "./ui/results-panel";
 import { DEFAULT_RANK_HTF, RankingPanel, fileLabel, inScope, type RankHtf, type RankRow, type RankScope, type RankSource } from "./ui/ranking-panel";
 import { MultiCompare, type CompareMode, type CompareRow } from "./ui/file-compare";
 import { SymbolPicker } from "./ui/symbol-picker";
+import { TradeNav } from "./ui/trade-nav";
 import { fileTfMinutes, runOnCoins, runOnFiles } from "./lib/batch";
 import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import { makePreset, savePreset } from "@/lib/trading/presets";
@@ -263,6 +264,11 @@ export default function KlinesPage() {
   const [focus, setFocus] = useState<{ trade: Trade; seq: number } | null>(null);
   // Only while it is still one of the current result's trades
   const focusNow = focus && result?.trades.includes(focus.trade) ? focus : null;
+  /** Chart toolbar navigation: focus a trade without leaving the chart */
+  const focusOnChart = useCallback((trade: Trade) => {
+    setFocus((f) => ({ trade, seq: (f?.seq ?? 0) + 1 }));
+    setShowTrades(true);
+  }, [setShowTrades]);
   const pickTrade = useCallback((trade: Trade) => {
     setFocus((f) => ({ trade, seq: (f?.seq ?? 0) + 1 }));
     setShowTrades(true);
@@ -615,14 +621,18 @@ export default function KlinesPage() {
                 <button type="button" onClick={() => setPicker("overlay")} className="flex h-8 shrink-0 items-center gap-1 border border-dashed px-2.5 text-[11px] text-muted-foreground hover:text-foreground">
                   <Plus size={12} /> Indicator
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowTrades((v) => !v)}
-                  className={cn("ml-auto flex h-8 shrink-0 items-center gap-1 px-2.5 text-[11px]", showTrades ? "text-foreground" : "text-muted-foreground")}
-                  title="แสดง/ซ่อนจุดเข้า-ออกของเทรด"
-                >
-                  {showTrades ? <Eye size={13} /> : <EyeSlash size={13} />} เทรด
-                </button>
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  <TradeNav trades={result?.trades ?? null} current={focusNow?.trade ?? null} onFocus={focusOnChart} className="hidden sm:flex" />
+                  <button
+                    type="button"
+                    onClick={() => setShowTrades((v) => !v)}
+                    className={cn("flex h-8 shrink-0 items-center gap-1 px-2 text-[11px]", showTrades ? "text-foreground" : "text-muted-foreground")}
+                    title="แสดง/ซ่อนจุดเข้า-ออกของเทรด"
+                    aria-label="แสดง/ซ่อนจุดเข้า-ออกของเทรด"
+                  >
+                    {showTrades ? <Eye size={13} /> : <EyeSlash size={13} />}<span className="hidden sm:inline">เทรด</span>
+                  </button>
+                </div>
               </div>
 
               {bars.length > 0 ? (
@@ -630,6 +640,13 @@ export default function KlinesPage() {
               ) : (
                 <div className="grid h-[320px] place-items-center text-xs text-muted-foreground lg:h-[460px]">
                   {data.loading ? `กำลังโหลด ${symbol} ${interval}…${data.progress ? ` ${data.progress.toLocaleString()} แท่ง` : ""}` : "ยังไม่มีข้อมูล — กดปุ่ม “ข้อมูล” ด้านบน"}
+                </div>
+              )}
+
+              {/* Mobile: entry-signal navigation gets its own full-width row (the toolbar is too narrow) */}
+              {bars.length > 0 && (
+                <div className="border-t px-2 py-1.5 sm:hidden">
+                  <TradeNav trades={result?.trades ?? null} current={focusNow?.trade ?? null} onFocus={focusOnChart} stretch className="w-full" />
                 </div>
               )}
 

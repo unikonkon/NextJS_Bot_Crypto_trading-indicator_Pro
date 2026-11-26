@@ -373,7 +373,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
           position: long ? "aboveBar" : "belowBar",
           color: t.pnlPct >= 0 ? UP : DOWN,
           shape: "circle",
-          text: withText || on ? `${on ? "ออก " : ""}${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct.toFixed(1)}%` : undefined,
+          text: withText || on ? `${on ? (t.exitReason === "end" ? "ถืออยู่ " : "ออก ") : ""}${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct.toFixed(1)}%` : undefined,
           ...(on ? { size: 2 } : {}),
         });
       }
@@ -407,13 +407,14 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     const win = t.pnlPct >= 0;
     focusLinesRef.current = [
       candle.createPriceLine({ price: t.entryPrice, color: long ? UP : DOWN, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: long ? "เข้า L" : "เข้า S" }),
-      candle.createPriceLine({ price: t.exitPrice, color: win ? UP : DOWN, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `ออก ${win ? "+" : ""}${t.pnlPct.toFixed(1)}%` }),
+      candle.createPriceLine({ price: t.exitPrice, color: win ? UP : DOWN, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${t.exitReason === "end" ? "ถืออยู่" : "ออก"} ${win ? "+" : ""}${t.pnlPct.toFixed(1)}%` }),
     ];
 
     // Show the whole trade with some bars around it (at least a readable window)
     const len = t.exitIdx - t.entryIdx;
     const pad = Math.max(compact ? 20 : 30, Math.round(len * 0.4));
-    const range = { from: t.entryIdx - pad, to: t.exitIdx + pad };
+    // …but not into empty space past either end of the data (e.g. a position still open at the last bar)
+    const range = { from: Math.max(-3, t.entryIdx - pad), to: Math.min(bars.length + 3, t.exitIdx + pad) };
     // On mobile the chart tab may still be hidden (width 0) — wait until it is laid out
     let tries = 0;
     let raf = 0;
