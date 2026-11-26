@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Play, Stop, TrendUp, TrendDown, Warning, Cpu, Check, X, Plus, Funnel, Files } from "@phosphor-icons/react";
+import { Play, Stop, TrendUp, TrendDown, Warning, Cpu, Check, X, Plus, Funnel, Files, ListBullets, CaretDown } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ import {
   type BacktestSummary, type Category, type HtfInterval, type IndicatorDef, type Source, type TradeMode,
 } from "@/lib/engine/types";
 import { SourceBadge } from "./indicator-picker";
+import { IndicatorList } from "./indicator-info";
 import { Sparkline } from "./equity-chart";
 import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import { fmtPct, toneClass } from "../lib/format";
@@ -403,6 +404,9 @@ export function RankingPanel(p: Props) {
   const [fileView, setFileView] = useState("all");
   const all = listIndicators();
   const scopeCount = (s: RankScope) => all.filter((d) => inScope(d, s, p.favorites)).length;
+  /** Strategies of the chosen group, listed with their explanations on request */
+  const scopeDefs = all.filter((d) => inScope(d, p.scope, p.favorites));
+  const [showDefs, setShowDefs] = useState(false);
   const scopes: RankScope[] = ["all", "fav", ...sourcesInUse(), ...categoriesInUse()];
   const scopeLabel = (s: RankScope) =>
     s === "all" ? "ทั้งหมด" : s === "fav" ? "★ โปรด" : SOURCE_SET.has(s) ? SOURCE_LABELS[s as Source].split(" · ")[0] : CATEGORY_LABELS[s as Category];
@@ -534,6 +538,26 @@ export function RankingPanel(p: Props) {
               </button>
             );
           })}
+        </div>
+
+        {/* Which strategies those are, each with its explanation */}
+        <div className={cn("border", showDefs && "border-primary/50")}>
+          <button type="button" aria-expanded={showDefs} onClick={() => setShowDefs((v) => !v)} disabled={scopeDefs.length === 0}
+            className="flex h-9 w-full items-center gap-2 px-3 text-left text-[11px] font-medium hover:bg-muted/50 disabled:opacity-40">
+            <ListBullets size={14} className="shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">แสดงกลยุทธ์ทั้ง {scopeDefs.length} ตัว พร้อมความหมาย</span>
+            <CaretDown size={12} className={cn("shrink-0 text-muted-foreground transition-transform", showDefs && "rotate-180")} />
+          </button>
+          {showDefs && (
+            <>
+              <p className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">แตะชื่อเพื่อดูว่ากลยุทธ์นั้นซื้อ-ขายเมื่อไร</p>
+              <IndicatorList
+                key={p.scope}
+                className="max-h-[55vh] overflow-y-auto border-t lg:max-h-[420px]"
+                items={scopeDefs.map((d) => ({ def: d, tag: d.id === p.currentId ? "บนกราฟ" : undefined }))}
+              />
+            </>
+          )}
         </div>
         <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <Cpu size={12} /> ใช้ {p.workers} worker · ทุกตัวประเมินช่วงเดียวกัน · indicator สัญญาณใช้โหมด {MODE_LABEL[p.mode]} + SL/TP ตามแท็บกลยุทธ์ · กลยุทธ์ที่ “ออกเอง” ใช้กฎของตัวเอง

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { BookmarkSimple, CaretDown, CaretRight, ChartLineUp, Faders, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
+import { BookmarkSimple, CaretDown, CaretRight, ChartLineUp, Faders, Info, Ranking, Plus, X, TrendUp, TrendDown, Warning, Eye, EyeSlash } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { INTERVAL_MINUTES, INTERVALS, type Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
@@ -19,6 +19,7 @@ import { TopBar } from "./ui/top-bar";
 import { DataSheet } from "./ui/data-sheet";
 import PriceChart, { type ChartIndicator } from "./ui/price-chart";
 import { IndicatorPicker } from "./ui/indicator-picker";
+import { IndicatorList } from "./ui/indicator-info";
 import { StrategyPanel } from "./ui/strategy-panel";
 import { ResultsPanel } from "./ui/results-panel";
 import { DEFAULT_RANK_HTF, RankingPanel, fileLabel, inScope, type RankHtf, type RankRow, type RankScope, type RankSource } from "./ui/ranking-panel";
@@ -58,6 +59,8 @@ export default function KlinesPage() {
   const [favorites, setFavorites] = useLocalState<string[]>("klines.favorites", []);
   const [overlayIds, setOverlayIds] = useLocalState<string[]>("klines.overlays", []);
   const [showTrades, setShowTrades] = useLocalState("klines.showTrades", true);
+  /** Explanations of the chart's indicators, opened from the chart toolbar */
+  const [showInfo, setShowInfo] = useLocalState("klines.chartInfo", false);
   const [rankScope, setRankScope] = useLocalState<RankScope>("klines.rankScope", "all");
   /** CSV files picked for multi-file runs, and whether the ranking uses them */
   const [batchFiles, setBatchFiles] = useLocalState<string[]>("klines.batchFiles", []);
@@ -691,6 +694,17 @@ export default function KlinesPage() {
                 <button type="button" onClick={() => setPicker("overlay")} className="flex h-8 shrink-0 items-center gap-1 border border-dashed px-2.5 text-[11px] text-muted-foreground hover:text-foreground">
                   <Plus size={12} /> Indicator
                 </button>
+                <button
+                  type="button"
+                  aria-expanded={showInfo}
+                  onClick={() => setShowInfo((v) => !v)}
+                  className={cn("flex h-8 shrink-0 items-center gap-1 border px-2 text-[11px] transition-colors", showInfo ? "border-primary text-foreground" : "text-muted-foreground hover:text-foreground")}
+                  title="ความหมายของ indicator ที่เลือก"
+                  aria-label="ความหมายของ indicator ที่เลือก"
+                >
+                  <Info size={13} /><span className="hidden sm:inline">ความหมาย</span>
+                  <CaretDown size={10} className={cn("transition-transform", showInfo && "rotate-180")} />
+                </button>
                 <div className="ml-auto flex shrink-0 items-center gap-1">
                   <TradeNav trades={result?.trades ?? null} current={focusNow?.trade ?? null} onFocus={focusOnChart} className="hidden sm:flex" />
                   <button
@@ -714,6 +728,16 @@ export default function KlinesPage() {
                   </button>
                 </div>
               </div>
+
+              {/* What the selected indicators mean — the strategy opens first */}
+              {showInfo && (
+                <IndicatorList
+                  key={def.id}
+                  className="max-h-[50vh] overflow-y-auto border-b lg:max-h-[360px]"
+                  defaultOpen={def.id}
+                  items={chartIndicators.map((c) => ({ def: c.def, params: c.params, tag: c.isStrategy ? "กลยุทธ์" : "แสดงบนกราฟ" }))}
+                />
+              )}
 
               {savedState === "just" && (
                 <p className="flex items-center gap-2 border-b bg-up/5 px-3 py-1.5 text-[11px] text-up" role="status">
