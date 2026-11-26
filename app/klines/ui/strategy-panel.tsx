@@ -9,7 +9,10 @@ import { engineOf, sourceOf } from "@/lib/engine/registry";
 import { SourceBadge } from "./indicator-picker";
 import {
   CATEGORY_LABELS,
+  HTF_LABELS,
   SOURCE_LABELS,
+  type HtfFilter,
+  type HtfInterval,
   type BacktestConfig,
   type FillMode,
   type BacktestResult,
@@ -20,7 +23,7 @@ import {
   type StopRule,
   type TradeMode,
 } from "@/lib/engine/types";
-import { fmtPct, toneClass } from "../lib/format";
+import { fmtDate, fmtPct, toneClass } from "../lib/format";
 
 interface Props {
   def: IndicatorDef;
@@ -38,6 +41,7 @@ interface Props {
   warmup: number;
   evalBars?: number;
   onShowResults: () => void;
+  htf: HtfStatus;
 }
 
 export const MODE_OPTIONS = [
@@ -152,6 +156,90 @@ function ParamField({ pd, value, onChange }: { pd: ParamDef; value: number; onCh
   );
 }
 
+export interface HtfStatus {
+  /** Filter on and the chart timeframe is lower than the filter's */
+  applies: boolean;
+  chartTf: string;
+  loading: boolean;
+  error: string | null;
+  /** State at the last bar: +1 Long only, −1 Short only, 0 unknown, null not computed */
+  state: number | null;
+  since: number | null;
+}
+
+function HtfSection({ f, onChange, status }: { f: HtfFilter; onChange: (f: HtfFilter) => void; status: HtfStatus }) {
+  const label = HTF_LABELS[f.interval];
+  const on = f.enabled;
+  return (
+    <div className={cn("space-y-3 border px-3 py-3", on && "border-primary/50 bg-muted/30")}>
+      <label className="flex cursor-pointer items-start gap-3">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          onClick={() => onChange({ ...f, enabled: !on })}
+          className={cn("relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors", on ? "bg-primary" : "bg-muted-foreground/30")}
+        >
+          <span className={cn("absolute top-0.5 size-4 rounded-full bg-background shadow transition-all", on ? "left-[18px]" : "left-0.5")} />
+        </button>
+        <span className="min-w-0">
+          <span className="block text-[11px] font-medium">เทรดตามทิศ EMA Cross ของ timeframe ใหญ่</span>
+          <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
+            EMA เร็ว &gt; ช้า บน {label} → เปิดได้เฉพาะ Long · EMA เร็ว &lt; ช้า → เปิดได้เฉพาะ Short ·
+            สัญญาณที่สวนทางยังใช้ปิดไม้ได้ แต่ไม่เปิดไม้ใหม่ · ไม้ที่ถืออยู่ไม่ถูกบังคับปิดเมื่อ {label} พลิก
+          </span>
+        </span>
+      </label>
+
+      {on && (
+        <>
+          <Segmented<HtfInterval>
+            size="sm"
+            value={f.interval}
+            onChange={(interval) => onChange({ ...f, interval })}
+            options={(Object.keys(HTF_LABELS) as HtfInterval[]).map((v) => ({ value: v, label: HTF_LABELS[v] }))}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-[11px] font-medium">EMA เร็ว</span>
+              <NumInput value={f.fast} onChange={(fast) => onChange({ ...f, fast })} min={1} max={200} step={1} className="h-9 w-full px-2 text-left" ariaLabel="EMA เร็ว" />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[11px] font-medium">EMA ช้า</span>
+              <NumInput value={f.slow} onChange={(slow) => onChange({ ...f, slow })} min={2} max={400} step={1} className="h-9 w-full px-2 text-left" ariaLabel="EMA ช้า" />
+            </label>
+          </div>
+          {f.fast >= f.slow && (
+            <p className="flex gap-1.5 text-[10px] text-amber-500"><Warning size={13} className="shrink-0" />EMA เร็วควรสั้นกว่า EMA ช้า</p>
+          )}
+          {!status.applies ? (
+            <p className="text-[10px] text-amber-500">ใช้ได้เมื่อกราฟเป็น timeframe ต่ำกว่า {label} (ตอนนี้ {status.chartTf}) — ตอนนี้ตัวกรองไม่มีผล</p>
+          ) : status.error ? (
+            <p className="text-[10px] text-red-500">โหลดข้อมูล {label} ไม่สำเร็จ: {status.error}</p>
+          ) : status.loading || status.state === null ? (
+            <p className="animate-pulse text-[10px] text-muted-foreground">กำลังโหลดข้อมูล {label}…</p>
+          ) : (
+            <p className="flex items-center gap-1.5 text-[11px]">
+              <span className="text-muted-foreground">{label} ตอนนี้:</span>
+              {status.state === 1 ? (
+                <b className="inline-flex items-center gap-1 text-emerald-500"><TrendUp size={13} weight="bold" /> ขาขึ้น · เปิดได้เฉพาะ Long</b>
+              ) : status.state === -1 ? (
+                <b className="inline-flex items-center gap-1 text-red-500"><TrendDown size={13} weight="bold" /> ขาลง · เปิดได้เฉพาะ Short</b>
+              ) : (
+                <b className="text-muted-foreground">ยังไม่ทราบ (ข้อมูลไม่พอ) · ไม่เปิดไม้</b>
+              )}
+              {status.since !== null && status.state !== 0 && <span className="text-[10px] text-muted-foreground">ตั้งแต่ {fmtDate(status.since, true)}</span>}
+            </p>
+          )}
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            ใช้เฉพาะแท่ง {label} ที่ปิดแล้ว (แท่งที่ยังไม่ปิดไม่ถูกใช้ ป้องกันการเห็นอนาคต) · บนกราฟ: แถบหนาโปร่งแสง = EMA เร็วของ TF ใหญ่ (เขียว = ช่วง Long, แดง = ช่วง Short) · เส้นประ = EMA ช้า
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function StopField({ label, rule, onChange, tone }: { label: string; rule: StopRule; onChange: (r: StopRule) => void; tone: string }) {
   return (
     <div className="space-y-1.5">
@@ -179,7 +267,7 @@ function StopField({ label, rule, onChange, tone }: { label: string; rule: StopR
 }
 
 export function StrategyPanel(props: Props) {
-  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults } = props;
+  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults, htf } = props;
   const paramsChanged = def.params.some((p) => !p.locked && params[p.key] !== p.default);
   const noExit = !config.exitOnOpposite && config.stopLoss.kind === "none" && config.takeProfit.kind === "none" && config.trailing.kind === "none";
   const engine = engineOf(def, params);
@@ -252,6 +340,12 @@ export function StrategyPanel(props: Props) {
             </div>
           </>
         )}
+      </section>
+
+      {/* 2b. Higher-timeframe trend filter — applies to every strategy */}
+      <section className="space-y-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">ตัวกรองเทรนด์ใหญ่ (Multi-timeframe)</h3>
+        <HtfSection f={config.htf} onChange={(h) => onConfig({ ...config, htf: h })} status={htf} />
       </section>
 
       {/* 3. Params */}

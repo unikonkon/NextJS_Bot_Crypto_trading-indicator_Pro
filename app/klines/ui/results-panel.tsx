@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { TrendUp, TrendDown, CaretLeft, CaretRight, CaretDown } from "@phosphor-icons/react";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
-import type { BacktestResult, Bars, IndicatorDef, SideStats, Trade, TradeMode } from "@/lib/engine/types";
+import { HTF_LABELS, type BacktestResult, type Bars, type IndicatorDef, type SideStats, type Trade, type TradeMode } from "@/lib/engine/types";
 import { EquityChart } from "./equity-chart";
 import { KlineTable } from "./kline-table";
 import { EXIT_REASON_LABEL, fmtDate, fmtPct, fmtPrice, toneClass } from "../lib/format";
@@ -213,6 +213,13 @@ export function ResultsPanel({ result, def, mode, bars, running }: Props) {
           {" · "}เข้า-ออกที่{r.fill === "nextOpen" ? "ราคาเปิดแท่งถัดไป" : "ราคาปิดแท่งสัญญาณ"}
           {r.engine === "exposure" && " · กลยุทธ์จัดการการออกเอง"}
         </p>
+        {r.htf && (
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            ตัวกรอง EMA {r.htf.fast}/{r.htf.slow} {HTF_LABELS[r.htf.interval]}: ไม่เข้า <b className="text-foreground">{r.htf.blocked.toLocaleString()}</b> สัญญาณที่สวนเทรนด์ใหญ่
+            {" · "}ขาขึ้น {Math.round((r.htf.bullBars / Math.max(1, evalCount)) * 100)}% / ขาลง {Math.round((r.htf.bearBars / Math.max(1, evalCount)) * 100)}% ของช่วงประเมิน
+            {r.htf.unknownBars > 0 && ` · ไม่มีข้อมูล ${HTF_LABELS[r.htf.interval]} ${r.htf.unknownBars.toLocaleString()} แท่ง (ไม่เปิดไม้)`}
+          </p>
+        )}
         {lastReason && (
           <p className="mt-1.5 border-l-2 border-primary/50 bg-muted/40 px-2 py-1.5 text-[11px] leading-snug">
             <span className="text-[10px] text-muted-foreground">สถานะล่าสุดจากกลยุทธ์: </span>{lastReason}

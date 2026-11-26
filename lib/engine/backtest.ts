@@ -8,6 +8,8 @@ import type {
   ExitReason,
   ExposureOutput,
   FillMode,
+  HtfFilter,
+  HtfReport,
   Side,
   SideStats,
   StopRule,
@@ -37,6 +39,13 @@ export interface RunOptions {
   /** Per-bar strategy explanations, copied onto trades */
   reasons?: (string | null)[] | null;
   warmupBars?: number;
+  /**
+   * Higher-timeframe state per bar (+1 bull / −1 bear / 0 unknown): new positions may only be
+   * opened on its side. Closing is never blocked and open positions are not forced out on a flip.
+   */
+  regime?: ArrayLike<number> | null;
+  /** Filter settings echoed into the result (required with `regime`) */
+  htf?: HtfFilter | null;
 }
 
 const sideSign = (s: Side) => (s === "long" ? 1 : -1);
@@ -165,21 +174,27 @@ export function runBacktest(bars: Bars, signals: ArrayLike<number>, cfg: Backtes
     });
   };
 
-  const act = (sig: number, i: number, price: number) => {
+  const regime = opts.regime ?? null;
+  let blocked = 0;
+  /** sigIdx = bar the signal was decided on (i for close fill, i − 1 for next-open fill) */
+  const act = (sig: number, i: number, price: number, sigIdx: number) => {
     const p = book.pos;
+    // Exits are never filtered: a Sell still closes a Long while the higher timeframe is bullish
     if (p && cfg.exitOnOpposite && ((p.side === "long" && sig === -1) || (p.side === "short" && sig === 1))) {
       book.close(i, price, "signal");
     }
     if (!book.pos) {
-      if (sig === 1 && allowLong) enter("long", i, price);
-      else if (sig === -1 && allowShort) enter("short", i, price);
+      const wanted = (sig === 1 && allowLong) || (sig === -1 && allowShort);
+      if (!wanted) return;
+      if (regime && regime[sigIdx] !== sig) { blocked++; return; }
+      enter(sig === 1 ? "long" : "short", i, price);
     }
   };
 
   let pending = 0;
   for (let i = start; i < n; i++) {
     // 1) Orders decided at the previous close
-    if (fill === "nextOpen" && pending !== 0) { act(pending, i, open[i]); pending = 0; }
+    if (fill === "nextOpen" && pending !== 0) { act(pending, i, open[i], i - 1); pending = 0; }
 
     // 2) Intrabar stop / take-profit / trailing
     const p = book.pos;
@@ -205,7 +220,7 @@ export function runBacktest(bars: Bars, signals: ArrayLike<number>, cfg: Backtes
     // 3) Signal at the close
     const sig = signals[i];
     if (sig === 1 || sig === -1) {
-      if (fill === "close") act(sig, i, close[i]);
+      if (fill === "close") act(sig, i, close[i], i);
       else pending = sig;
     }
 
@@ -227,6 +242,7 @@ export function runBacktest(bars: Bars, signals: ArrayLike<number>, cfg: Backtes
     direction: cfg.mode,
     startIndex: start,
     warmupBars: opts.warmupBars ?? start,
+    htf: htfReport(opts, start, n, blocked),
   };
 }
 
@@ -244,10 +260,24 @@ export function runExposure(bars: Bars, out: ExposureOutput, cfg: BacktestConfig
   const { exposure, exitFill } = out;
   const target = (i: number) => (i >= start && i < n ? (Number.isFinite(exposure[i]) ? exposure[i] : 0) : 0);
 
+  const regime = opts.regime ?? null;
+  let blocked = 0;
   for (let i = start; i < n; i++) {
     // 1) Execute the target set at the previous close, at this bar's open
-    const tgt = target(i - 1);
+    let tgt = target(i - 1);
     const p = book.pos;
+    if (regime && tgt !== 0) {
+      // Higher-timeframe filter: a position already held on this side may stay (but not grow);
+      // a new one opens only when the strategy itself enters, on the higher timeframe's side.
+      const s = Math.sign(tgt);
+      const ok = regime[i - 1] === s;
+      if (p && sideSign(p.side) === s) {
+        if (!ok) tgt = s * Math.min(Math.abs(tgt), p.size);
+      } else if (!ok || target(i - 2) === tgt) {
+        if (!ok && target(i - 2) !== tgt) blocked++;
+        tgt = 0;
+      }
+    }
     const cur = p ? sideSign(p.side) * p.size : 0;
     if (tgt !== cur) {
       if (p && (tgt === 0 || Math.sign(tgt) !== sideSign(p.side))) book.close(i, bars.open[i], "signal");
@@ -292,7 +322,20 @@ export function runExposure(bars: Bars, out: ExposureOutput, cfg: BacktestConfig
     direction,
     startIndex: start,
     warmupBars: opts.warmupBars ?? start,
+    htf: htfReport(opts, start, n, blocked),
   };
+}
+
+function htfReport(opts: RunOptions, start: number, n: number, blocked: number): HtfReport | null {
+  const r = opts.regime, f = opts.htf;
+  if (!r || !f) return null;
+  let bullBars = 0, bearBars = 0, unknownBars = 0;
+  for (let i = start; i < n; i++) {
+    if (r[i] === 1) bullBars++;
+    else if (r[i] === -1) bearBars++;
+    else unknownBars++;
+  }
+  return { interval: f.interval, fast: f.fast, slow: f.slow, blocked, bullBars, bearBars, unknownBars };
 }
 
 function sideStats(trades: Trade[]): SideStats {

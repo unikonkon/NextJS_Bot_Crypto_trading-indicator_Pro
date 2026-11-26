@@ -37,6 +37,8 @@ interface Props {
   compact: boolean;
   /** Same evaluation window as the backtest, so stateful strategies plot identically */
   evalBars?: number;
+  /** Extra price-pane lines (e.g. the higher-timeframe EMAs of the trend filter) */
+  extraOverlays?: SeriesPlot[];
 }
 
 const UP = "#10b981";
@@ -104,7 +106,7 @@ function writeLegend(el: HTMLDivElement | null, b: Bars, idx: number) {
     `<b style="color:${tone}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</b>`;
 }
 
-export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars }: Props) {
+export default function PriceChart({ bars, indicators, trades, showTrades, compact, evalBars, extraOverlays }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -229,6 +231,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
       return api;
     };
 
+    for (const o of extraOverlays ?? []) add(o, 0, true);
     let paneIdx = 1;
     const last = bars.length - 1;
     for (const { plot } of plots) {
@@ -262,7 +265,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
       const n = bars.length;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - (compact ? 120 : 220)), to: n + 3 });
     }
-  }, [bars, plots, compact]);
+  }, [bars, plots, compact, extraOverlays]);
 
   // ─── Markers: trades (Long ▲ / Short ▼ / exits ●) or indicator markers ─
   useEffect(() => {

@@ -28,6 +28,8 @@ export function runJob(cache: ComputeCache, job: RunJob): JobOutput {
     throw new Error(`ข้อมูลไม่พอ: ต้องอุ่นเครื่อง ${warmup.toLocaleString()} แท่ง + ประเมินอย่างน้อย 30 แท่ง (มี ${bars.length.toLocaleString()})`);
   }
 
+  const trend = cache.htfTrend(job.config.htf, ctx.tfMinutes);
+  const filter = trend ? { regime: trend.regime, htf: job.config.htf } : {};
   const r = cache.compute(def, params, ctx);
   const reasons = def.reasons?.(r, params) ?? null;
   const engine = engineOf(def, params);
@@ -35,12 +37,12 @@ export function runJob(cache: ComputeCache, job: RunJob): JobOutput {
   if (engine.kind === "exposure") {
     if (!def.exposure) throw new Error(`${def.id}: exposure() missing`);
     result = runExposure(bars, def.exposure(r, bars, params), job.config, engine.direction, {
-      startIndex: ctx.startIndex, reasons, warmupBars: warmup,
+      startIndex: ctx.startIndex, reasons, warmupBars: warmup, ...filter,
     });
   } else {
     const fill: FillMode = job.config.fill === "auto" ? def.defaultFill ?? "close" : job.config.fill;
     result = runBacktest(bars, def.signals(r, bars, params), job.config, {
-      startIndex: ctx.startIndex, fill, reasons, warmupBars: warmup,
+      startIndex: ctx.startIndex, fill, reasons, warmupBars: warmup, ...filter,
     });
   }
   return job.full ? result : toSummary(result);

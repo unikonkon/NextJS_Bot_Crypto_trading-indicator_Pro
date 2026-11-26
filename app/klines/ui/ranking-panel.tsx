@@ -62,6 +62,8 @@ interface Props {
   onScope: (s: RankScope) => void;
   favorites: string[];
   mode: TradeMode;
+  /** Active higher-timeframe filter, e.g. "ตัวกรอง EMA 9/21 1D" */
+  htfNote: string | null;
   workers: number;
   barCount: number;
   currentId: string;
@@ -126,6 +128,7 @@ export function RankingPanel(p: Props) {
         </div>
         <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <Cpu size={12} /> ใช้ {p.workers} worker · ทุกตัวประเมินช่วงเดียวกัน · indicator สัญญาณใช้โหมด {MODE_LABEL[p.mode]} + SL/TP ตามแท็บกลยุทธ์ · กลยุทธ์ที่ “ออกเอง” ใช้กฎของตัวเอง
+          {p.htfNote && ` · ${p.htfNote}: ทุกตัวเปิดไม้ได้เฉพาะฝั่งเดียวกับเทรนด์ใหญ่`}
         </p>
       </section>
 

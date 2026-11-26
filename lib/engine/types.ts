@@ -208,6 +208,24 @@ export interface StopRule {
   value: number;
 }
 
+/** Higher timeframe used as a trend filter */
+export type HtfInterval = "4h" | "1d" | "1w";
+export const HTF_MINUTES: Record<HtfInterval, number> = { "4h": 240, "1d": 1440, "1w": 10080 };
+export const HTF_LABELS: Record<HtfInterval, string> = { "4h": "4H", "1d": "1D", "1w": "1W" };
+
+/**
+ * Multi-timeframe trend filter: EMA fast/slow on the higher timeframe decides the side.
+ * While fast > slow only Long entries are taken, while fast < slow only Short entries.
+ * Signals against it can still close a position; a position is never forced out when the
+ * higher timeframe flips. Only *closed* higher-timeframe bars are used (no lookahead).
+ */
+export interface HtfFilter {
+  enabled: boolean;
+  interval: HtfInterval;
+  fast: number;
+  slow: number;
+}
+
 export interface BacktestConfig {
   mode: TradeMode;
   /** "auto" = use the indicator's defaultFill */
@@ -221,6 +239,8 @@ export interface BacktestConfig {
   trailing: StopRule;
   /** Close a position when the opposite signal appears */
   exitOnOpposite: boolean;
+  /** Higher-timeframe trend filter (applies only when the chart timeframe is lower) */
+  htf: HtfFilter;
 }
 
 export const DEFAULT_CONFIG: BacktestConfig = {
@@ -232,6 +252,7 @@ export const DEFAULT_CONFIG: BacktestConfig = {
   takeProfit: { kind: "none", value: 4 },
   trailing: { kind: "none", value: 2 },
   exitOnOpposite: true,
+  htf: { enabled: false, interval: "1d", fast: 9, slow: 21 },
 };
 
 export type Side = "long" | "short";
@@ -300,6 +321,21 @@ export interface RunInfo {
   /** First evaluated bar; bars before it are warm-up */
   startIndex: number;
   warmupBars: number;
+  /** Higher-timeframe filter that was applied to this run (null = none) */
+  htf: HtfReport | null;
+}
+
+export interface HtfReport {
+  interval: HtfInterval;
+  fast: number;
+  slow: number;
+  /** Entries skipped because they went against the higher timeframe */
+  blocked: number;
+  /** Evaluated bars by higher-timeframe state */
+  bullBars: number;
+  bearBars: number;
+  /** Bars without a known state (not enough higher-timeframe history) — no entries there */
+  unknownBars: number;
 }
 
 export interface BacktestResult extends BacktestStats, RunInfo {

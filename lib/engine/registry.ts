@@ -1,5 +1,6 @@
 import { INDICATORS } from "./indicators";
-import type { Bars, Category, ComputeContext, IndicatorDef, Params, Source } from "./types";
+import { htfTrend, type HtfTrend } from "./htf";
+import { HTF_LABELS, HTF_MINUTES, type Bars, type Category, type ComputeContext, type HtfFilter, type HtfInterval, type IndicatorDef, type Params, type Source } from "./types";
 
 const BY_ID = new Map<string, IndicatorDef>();
 for (const def of INDICATORS) {
@@ -83,16 +84,43 @@ export function planRun(def: IndicatorDef, p: Params, bars: Bars, evalBars?: num
   return { ctx: { startIndex, tfMinutes } as ComputeContext, warmup };
 }
 
+/** The filter is on and the chart timeframe is lower than the filter's timeframe */
+export function htfApplies(f: HtfFilter | undefined, tfMinutes: number): f is HtfFilter {
+  return !!f?.enabled && tfMinutes > 0 && tfMinutes < HTF_MINUTES[f.interval];
+}
+
 /**
  * Small LRU cache of compute() results keyed by indicator+params.
  * One instance per dataset — create a new one when the bars change.
  */
 export class ComputeCache {
   private map = new Map<string, unknown>();
+  private htf: { interval: HtfInterval; bars: Bars } | null = null;
+  private trend: { key: string; value: HtfTrend } | null = null;
   constructor(private bars: Bars, private max = 40) {}
 
   get dataBars(): Bars {
     return this.bars;
+  }
+
+  /** Higher-timeframe bars of the same market (for the trend filter) */
+  setHtf(interval: HtfInterval | null, bars: Bars | null) {
+    this.htf = interval && bars ? { interval, bars } : null;
+    this.trend = null;
+  }
+
+  /**
+   * Higher-timeframe state per chart bar, or null when the filter is off or does not apply
+   * (chart timeframe not lower than the filter's). Throws when the data has not been loaded.
+   */
+  htfTrend(f: HtfFilter | undefined, tfMinutes: number): HtfTrend | null {
+    if (!htfApplies(f, tfMinutes)) return null;
+    if (!this.htf || this.htf.interval !== f!.interval || this.htf.bars.length === 0) {
+      throw new Error(`กำลังโหลดข้อมูล ${HTF_LABELS[f!.interval]} สำหรับตัวกรองเทรนด์…`);
+    }
+    const key = `${f!.interval}|${f!.fast}|${f!.slow}|${tfMinutes}`;
+    if (this.trend?.key !== key) this.trend = { key, value: htfTrend(this.bars, this.htf.bars, f!, tfMinutes) };
+    return this.trend.value;
   }
 
   compute(def: IndicatorDef, p: Params, ctx: ComputeContext): unknown {

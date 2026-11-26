@@ -32,6 +32,25 @@ async function fetchPage(params: Record<string, string>, signal: AbortSignal): P
   return raw.map(parseKline);
 }
 
+/** Every bar of `interval` between start and end, paging forwards (shared by the main data and the trend filter) */
+export async function fetchKlinesRange(
+  symbol: string, interval: string, start: number, end: number, signal: AbortSignal, onProgress?: (n: number) => void,
+): Promise<KlineData[]> {
+  const all: KlineData[] = [];
+  let cur = start;
+  while (cur < end) {
+    const page = await fetchPage({ symbol, interval, limit: String(PAGE), startTime: String(cur), endTime: String(end) }, signal);
+    if (page.length === 0) break;
+    all.push(...page);
+    onProgress?.(all.length);
+    const last = page[page.length - 1].closeTime;
+    if (last >= end || page.length < PAGE) break;
+    cur = last + 1;
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  return all;
+}
+
 function parseCsv(text: string): KlineData[] {
   return text.trim().split("\n").slice(1).map((line) => {
     const c = line.split(",");
@@ -114,21 +133,7 @@ export function useKlineData() {
 
   /** Every bar between start and end, paging forwards */
   const loadRange = useCallback((symbol: string, interval: Interval, start: number, end: number) =>
-    run({ kind: "range", start, end }, async (signal) => {
-      const all: KlineData[] = [];
-      let cur = start;
-      while (cur < end) {
-        const page = await fetchPage({ symbol, interval, limit: String(PAGE), startTime: String(cur), endTime: String(end) }, signal);
-        if (page.length === 0) break;
-        all.push(...page);
-        setProgress(all.length);
-        const last = page[page.length - 1].closeTime;
-        if (last >= end || page.length < PAGE) break;
-        cur = last + 1;
-        await new Promise((r) => setTimeout(r, 80));
-      }
-      return all;
-    }), [run]);
+    run({ kind: "range", start, end }, (signal) => fetchKlinesRange(symbol, interval, start, end, signal, setProgress)), [run]);
 
   const loadCsv = useCallback((file: string) =>
     run({ kind: "csv", file }, async (signal) => {

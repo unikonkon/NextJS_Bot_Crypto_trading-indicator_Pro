@@ -2,12 +2,13 @@ import type { KlineData } from "@/lib/types/kline";
 import { toBars } from "../math";
 import { ComputeCache } from "../registry";
 import { runJob, type JobOutput, type RunJob } from "../runner";
-import type { BacktestResult, BacktestSummary } from "../types";
+import type { BacktestResult, BacktestSummary, HtfInterval } from "../types";
 import type { WorkerRequest, WorkerResponse } from "./protocol";
 
 interface Task {
   id: number;
   datasetId: number;
+  htfId: number;
   job: RunJob;
   resolve: (r: JobOutput) => void;
   reject: (e: unknown) => void;
@@ -18,6 +19,7 @@ interface Slot {
   worker: Worker;
   task: Task | null;
   datasetId: number;
+  htfId: number;
 }
 
 export class AbortedError extends Error {
@@ -39,6 +41,8 @@ export class BacktestPool {
   private nextId = 1;
   private datasetId = 0;
   private klines: KlineData[] = [];
+  private htfId = 0;
+  private htf: { interval: HtfInterval | null; klines: KlineData[] | null } = { interval: null, klines: null };
   private inlineCache: ComputeCache | null = null;
   private inlineMode = false;
   private inlineBusy = false;
@@ -60,12 +64,13 @@ export class BacktestPool {
 
   private spawn(): Slot {
     const worker = new Worker(new URL("./backtest.worker.ts", import.meta.url), { type: "module" });
-    const slot: Slot = { worker, task: null, datasetId: -1 };
+    const slot: Slot = { worker, task: null, datasetId: -1, htfId: -1 };
     worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const task = slot.task;
       slot.task = null;
       if (task && task.id === e.data.jobId && !task.aborted) {
-        if (e.data.type === "result") task.resolve(e.data.result);
+        if (task.htfId !== this.htfId) task.reject(new AbortedError());
+        else if (e.data.type === "result") task.resolve(e.data.result);
         else task.reject(new Error(e.data.error));
       }
       this.pump();
@@ -93,12 +98,22 @@ export class BacktestPool {
     for (const s of this.slots) if (s.task) { s.task.aborted = true; s.task.reject(new AbortedError()); }
   }
 
+  /** Replace the higher-timeframe bars used by the trend filter. Queued jobs are cancelled. */
+  setHtf(interval: HtfInterval | null, klines: KlineData[] | null): void {
+    this.htfId++;
+    this.htf = { interval, klines };
+    this.inlineCache?.setHtf(interval, klines ? toBars(klines) : null);
+    const stale = this.queue;
+    this.queue = [];
+    for (const t of stale) { t.aborted = true; t.reject(new AbortedError()); }
+  }
+
   run(job: RunJob & { full: true }, signal?: AbortSignal): Promise<BacktestResult>;
   run(job: RunJob & { full: false }, signal?: AbortSignal): Promise<BacktestSummary>;
   run(job: RunJob, signal?: AbortSignal): Promise<JobOutput> {
     return new Promise<JobOutput>((resolve, reject) => {
       if (signal?.aborted) return reject(new AbortedError());
-      const task: Task = { id: this.nextId++, datasetId: this.datasetId, job, resolve, reject, aborted: false };
+      const task: Task = { id: this.nextId++, datasetId: this.datasetId, htfId: this.htfId, job, resolve, reject, aborted: false };
       signal?.addEventListener("abort", () => {
         if (task.aborted) return;
         task.aborted = true;
@@ -139,7 +154,11 @@ export class BacktestPool {
       if (slot.task) continue;
       const task = this.queue.shift();
       if (!task) return;
-      if (task.datasetId !== this.datasetId) { task.reject(new AbortedError()); continue; }
+      if (task.datasetId !== this.datasetId || task.htfId !== this.htfId) { task.reject(new AbortedError()); continue; }
+      if (slot.htfId !== this.htfId) {
+        slot.worker.postMessage({ type: "htf", htfId: this.htfId, ...this.htf } satisfies WorkerRequest);
+        slot.htfId = this.htfId;
+      }
       if (slot.datasetId !== this.datasetId) {
         slot.worker.postMessage({ type: "load", datasetId: this.datasetId, klines: this.klines } satisfies WorkerRequest);
         slot.datasetId = this.datasetId;
@@ -158,7 +177,10 @@ export class BacktestPool {
     setTimeout(() => {
       try {
         if (task.datasetId === this.datasetId && !task.aborted) {
-          if (!this.inlineCache) this.inlineCache = new ComputeCache(toBars(this.klines));
+          if (!this.inlineCache) {
+            this.inlineCache = new ComputeCache(toBars(this.klines));
+            this.inlineCache.setHtf(this.htf.interval, this.htf.klines ? toBars(this.htf.klines) : null);
+          }
           task.resolve(runJob(this.inlineCache, task.job));
         }
       } catch (err) {

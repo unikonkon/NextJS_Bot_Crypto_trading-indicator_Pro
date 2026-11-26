@@ -5,10 +5,12 @@ import { ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown,
 import { cn } from "@/lib/utils";
 import type { Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
-import { getIndicator, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
+import { detectTfMinutes, getIndicator, htfApplies, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
+import { htfTrend } from "@/lib/engine/htf";
 import { getPool, AbortedError } from "@/lib/engine/worker/pool";
-import { DEFAULT_CONFIG, type BacktestConfig, type BacktestResult, type Bars, type Params } from "@/lib/engine/types";
+import { DEFAULT_CONFIG, HTF_LABELS, type BacktestConfig, type BacktestResult, type Bars, type LinePlot, type Params } from "@/lib/engine/types";
 import { useKlineData } from "./lib/use-kline-data";
+import { useHtfData } from "./lib/use-htf-data";
 import { useLocalState } from "./lib/use-local-state";
 import { useMediaQuery } from "./lib/use-media";
 import { fmtPct, toneClass } from "./lib/format";
@@ -128,6 +130,38 @@ export default function KlinesPage() {
     loadLatest(symbol, interval, desiredTotal);
   }, [ready, data.loading, data.klines.length, isLatest, bars.length, desiredTotal, symbol, interval, loadLatest]);
 
+  // ─── Higher-timeframe trend filter (e.g. EMA Cross on 1D while trading 30m) ──
+  // Same bar spacing the engine detects, so a CSV of another timeframe is handled correctly
+  const dataTfMinutes = bars.length > 1 ? detectTfMinutes(bars) : tfMinutes;
+  const htfActive = htfApplies(config.htf, dataTfMinutes);
+  const csvSymbol = data.source?.kind === "csv" ? /^([A-Z0-9]{5,})_/.exec(data.source.file)?.[1] : undefined;
+  const htf = useHtfData({
+    active: htfActive,
+    symbol: csvSymbol ?? symbol,
+    filter: config.htf,
+    firstTime: bars.length ? bars.time[0] : null,
+    lastTime: bars.length ? bars.time[bars.length - 1] : null,
+    ltfMinutes: dataTfMinutes,
+  });
+  const htfReady = !htfActive || !!htf.klines;
+  const htfBars = useMemo(() => (htf.klines ? toBars(htf.klines) : null), [htf.klines]);
+  const trend = useMemo(
+    () => (htfActive && htfBars && bars.length ? htfTrend(bars, htfBars, config.htf, dataTfMinutes) : null),
+    [htfActive, htfBars, bars, config.htf, dataTfMinutes],
+  );
+  const htfLabel = HTF_LABELS[config.htf.interval];
+  const htfOverlays = useMemo<LinePlot[]>(() => {
+    if (!trend) return [];
+    const { fast, slow } = config.htf;
+    return [
+      // fast EMA colored by the higher-timeframe state: green = Long only, red = Short only
+      // drawn as a wide translucent band so it is not mistaken for the strategy's own lines
+      { kind: "line", title: `EMA${fast} ${htfLabel}`, color: "rgba(16,185,129,0.4)", width: 4, values: trend.fast,
+        colors: Array.from(trend.regime, (r) => (r === 1 ? "rgba(16,185,129,0.4)" : r === -1 ? "rgba(239,68,68,0.4)" : null)) },
+      { kind: "line", title: `EMA${slow} ${htfLabel}`, color: "#94a3b8", width: 1, style: 2, values: trend.slow },
+    ];
+  }, [trend, config.htf, htfLabel]);
+
   // ─── Single backtest (auto-runs on the worker pool, debounced) ──
   const [single, setSingle] = useState<{ bars: Bars; result: BacktestResult } | null>(null);
   const [running, setRunning] = useState(false);
@@ -137,8 +171,19 @@ export default function KlinesPage() {
     if (data.klines.length) getPool().setData(data.klines);
   }, [data.klines]);
 
+  // Must run before the backtest effect below so jobs see the new higher-timeframe bars
+  useEffect(() => {
+    getPool().setHtf(htf.klines ? config.htf.interval : null, htf.klines);
+  }, [htf.klines, config.htf.interval]);
+
   useEffect(() => {
     if (bars.length === 0) { setRunning(false); return; }
+    if (!htfReady) {
+      // waiting for the higher-timeframe bars (or they failed to load)
+      setRunning(!htf.error);
+      setRunError(htf.error ? `โหลดข้อมูล ${htfLabel} ไม่สำเร็จ: ${htf.error}` : null);
+      return;
+    }
     const ctrl = new AbortController();
     setRunning(true);
     const t = setTimeout(() => {
@@ -153,7 +198,7 @@ export default function KlinesPage() {
         .finally(() => { if (!ctrl.signal.aborted) setRunning(false); });
     }, 180);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [bars, def, params, config, evalBars]);
+  }, [bars, def, params, config, evalBars, htfReady, htf.klines, htf.error, htfLabel]);
 
   // A result only belongs to the bars it was computed on
   const result = single && single.bars === bars ? single.result : null;
@@ -164,14 +209,16 @@ export default function KlinesPage() {
   const [rankProgress, setRankProgress] = useState<{ done: number; total: number } | null>(null);
   const [rankPending, setRankPending] = useState<{ since: Date | null } | null>(null);
   const rankCtrl = useRef<AbortController | null>(null);
-  const configKey = `${JSON.stringify(config)}|${evalBars ?? "all"}`;
+  const configKey = `${JSON.stringify(config)}|${evalBars ?? "all"}|${htfActive ? htf.klines?.length ?? "-" : "off"}`;
 
   const runRanking = useCallback(async (afterReload = false) => {
     const defs = listIndicators().filter((d) => inScope(d, rankScope, favorites));
     if (!defs.length || bars.length < 50) return;
+    if (htf.error) { setError(`โหลดข้อมูล ${htfLabel} ไม่สำเร็จ: ${htf.error}`); return; }
     // Every indicator must be evaluated on the same window → load enough history for the longest warm-up first
     const maxWarm = Math.max(0, ...defs.map((d) => warmupOf(d, normalizeParams(d, paramsById[d.id]), tfMinutes)));
-    if (isLatest && !afterReload && bars.length < Math.min(MAX_BARS, limit + maxWarm)) {
+    // …and the higher-timeframe bars must cover them (a refresh mid-run would cancel the jobs)
+    if (!afterReload && (htf.loading || !htfReady || (isLatest && bars.length < Math.min(MAX_BARS, limit + maxWarm)))) {
       setRankWarmup(maxWarm);
       setRankRunning(true);
       setRankPending({ since: data.loadedAt });
@@ -203,16 +250,17 @@ export default function KlinesPage() {
         rankCtrl.current = null;
       }
     }
-  }, [rankScope, favorites, bars, paramsById, config, configKey, setError, tfMinutes, isLatest, limit, evalBars, data.loadedAt]);
+  }, [rankScope, favorites, bars, paramsById, config, configKey, setError, tfMinutes, isLatest, limit, evalBars, data.loadedAt, htfReady, htfLabel, htf.loading, htf.error]);
 
   // Run the ranking once the extra warm-up history has arrived (or the exchange had no more)
   useEffect(() => {
-    if (!rankPending || data.loading) return;
-    const enough = bars.length >= Math.min(MAX_BARS, limit + rankWarmup);
+    if (!rankPending || data.loading || htf.loading) return;
+    if (!htfReady) { setRankPending(null); setRankRunning(false); return; }
+    const enough = !isLatest || bars.length >= Math.min(MAX_BARS, limit + rankWarmup);
     if (!enough && data.loadedAt === rankPending.since) return;
     setRankPending(null);
     void runRanking(true);
-  }, [rankPending, data.loading, data.loadedAt, bars.length, limit, rankWarmup, runRanking]);
+  }, [rankPending, data.loading, data.loadedAt, bars.length, limit, rankWarmup, runRanking, htf.loading, htfReady, isLatest]);
 
   const cancelRanking = useCallback(() => {
     rankCtrl.current?.abort();
@@ -300,7 +348,7 @@ export default function KlinesPage() {
               </div>
 
               {bars.length > 0 ? (
-                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} />
+                <PriceChart bars={bars} indicators={chartIndicators} trades={result?.trades ?? null} showTrades={showTrades} compact={!isDesktop} evalBars={evalBars} extraOverlays={htfOverlays} />
               ) : (
                 <div className="grid h-[320px] place-items-center text-xs text-muted-foreground lg:h-[460px]">
                   {data.loading ? `กำลังโหลด ${symbol} ${interval}…${data.progress ? ` ${data.progress.toLocaleString()} แท่ง` : ""}` : "ยังไม่มีข้อมูล — กดปุ่ม “ข้อมูล” ด้านบน"}
@@ -368,6 +416,14 @@ export default function KlinesPage() {
               warmup={strategyWarmup}
               evalBars={evalBars}
               onShowResults={showResults}
+              htf={{
+                applies: htfActive,
+                chartTf: interval,
+                loading: htf.loading,
+                error: htf.error,
+                state: trend && bars.length ? trend.regime[bars.length - 1] : null,
+                since: trend && trend.sinceIdx >= 0 ? bars.time[trend.sinceIdx] : null,
+              }}
             />
           </section>
           <section className={sideVis("ranking")}>
@@ -380,6 +436,7 @@ export default function KlinesPage() {
               onScope={setRankScope}
               favorites={favorites}
               mode={config.mode}
+              htfNote={htfActive ? `ตัวกรอง EMA ${config.htf.fast}/${config.htf.slow} ${htfLabel}` : null}
               workers={ready ? getPool().size : 1}
               barCount={bars.length}
               currentId={def.id}
