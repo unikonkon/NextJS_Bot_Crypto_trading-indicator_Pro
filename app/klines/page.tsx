@@ -24,6 +24,7 @@ import { DEFAULT_RANK_HTF, RankingPanel, inScope, type RankHtf, type RankRow, ty
 import { FileCompare, type CompareRow } from "./ui/file-compare";
 import { fileTfMinutes, runOnFiles } from "./lib/batch";
 import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
+import { makePreset, savePreset } from "@/lib/trading/presets";
 
 type MobileTab = "chart" | "strategy" | "results" | "ranking";
 
@@ -515,6 +516,18 @@ export default function KlinesPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
+  // ─── Send the current strategy to the trading bot (/trading/Binance) ──
+  const [sentPreset, setSentPreset] = useState<{ id: string; key: string } | null>(null);
+  const botKey = `${def.id}|${JSON.stringify(params)}|${JSON.stringify(config)}|${csvSymbol ?? symbol}|${interval}`;
+  const sendToBot = useCallback(() => {
+    const p = makePreset({
+      indicatorId: def.id, indicatorName: def.name, params, config,
+      symbol: csvSymbol ?? symbol, interval, result, times: bars.time,
+    });
+    savePreset(p);
+    setSentPreset({ id: p.id, key: botKey });
+  }, [def, params, config, csvSymbol, symbol, interval, result, bars.time, botKey]);
+
   const lastClose = bars.length ? bars.close[bars.length - 1] : null;
   const changePct = bars.length > 1 ? ((bars.close[bars.length - 1] - bars.close[0]) / bars.close[0]) * 100 : null;
 
@@ -662,6 +675,8 @@ export default function KlinesPage() {
               }}
               onClearHtf={() => setConfig((c) => ({ ...c, htf: { ...normalizeHtf(c.htf), enabled: false } }))}
               onFindHtf={goRanking}
+              onSendToBot={sendToBot}
+              sentPresetId={sentPreset?.key === botKey ? sentPreset.id : null}
             />
             <FileCompare
               strategyName={def.name}

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Minus, Plus, Warning, ChartLineUp, LockSimple, Info, Funnel, X } from "@phosphor-icons/react";
+import Link from "next/link";
+import { CaretRight, TrendUp, TrendDown, ArrowsDownUp, ArrowCounterClockwise, Minus, Plus, Warning, ChartLineUp, LockSimple, Info, Funnel, X, Robot } from "@phosphor-icons/react";
 import { Segmented } from "@/components/ui/segmented";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,10 @@ interface Props {
   onClearHtf: () => void;
   /** Go to the ranking tab to find a filter */
   onFindHtf: () => void;
+  /** Save this strategy + settings as a preset for the trading bot (/trading/Binance) */
+  onSendToBot?: () => void;
+  /** Id of the preset just sent (shows a link to the bot) */
+  sentPresetId?: string | null;
 }
 
 export const MODE_OPTIONS = [
@@ -264,7 +269,7 @@ function StopField({ label, rule, onChange, tone }: { label: string; rule: StopR
 }
 
 export function StrategyPanel(props: Props) {
-  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults, htf, onClearHtf, onFindHtf } = props;
+  const { def, params, onParam, onResetParams, onOpenPicker, config, onConfig, result, running, runError, warmup, evalBars, onShowResults, htf, onClearHtf, onFindHtf, onSendToBot, sentPresetId } = props;
   const paramsChanged = def.params.some((p) => !p.locked && params[p.key] !== p.default);
   const noExit = !config.exitOnOpposite && config.stopLoss.kind === "none" && config.takeProfit.kind === "none" && config.trailing.kind === "none";
   const engine = engineOf(def, params);
@@ -417,6 +422,28 @@ export function StrategyPanel(props: Props) {
             <Button variant="outline" size="lg" onClick={onShowResults} disabled={!result}>
               <ChartLineUp size={14} /> ดูผล
             </Button>
+          </div>
+        )}
+        {onSendToBot && (
+          <div className="mt-2 flex items-center gap-2 border-t pt-2">
+            {sentPresetId ? (
+              <>
+                <p className="min-w-0 flex-1 text-[10px] leading-snug text-emerald-500">ส่งกลยุทธ์นี้ไปบอทแล้ว — เลือกใช้ได้ในหน้า Binance Trading</p>
+                <Link href={`/trading/Binance?preset=${encodeURIComponent(sentPresetId)}`}
+                  className="inline-flex h-9 shrink-0 items-center gap-1 bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90">
+                  เปิดบอท <CaretRight size={12} />
+                </Link>
+              </>
+            ) : (
+              <>
+                <p className="min-w-0 flex-1 text-[10px] leading-snug text-muted-foreground">
+                  พอใจผลแล้ว? ส่ง indicator + ค่าทั้งหมดนี้ไปให้บอทเทรดจริงบน Binance
+                </p>
+                <Button variant="outline" size="lg" onClick={onSendToBot} disabled={running || !!runError} className="shrink-0">
+                  <Robot size={14} /> ส่งไปบอทเทรด
+                </Button>
+              </>
+            )}
           </div>
         )}
       </section>

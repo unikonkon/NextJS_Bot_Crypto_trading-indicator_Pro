@@ -1,37 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorMessage, publicGet, type Market } from "@/lib/binance/server";
 
-const BINANCE_BASE = "https://api.binance.com";
-
+/** Last price of one symbol: ?symbol=BTCUSDT[&market=futures] */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const symbol = searchParams.get("symbol");
+  const symbol = (request.nextUrl.searchParams.get("symbol") ?? "").toUpperCase();
+  const market: Market = request.nextUrl.searchParams.get("market") === "futures" ? "futures" : "spot";
 
   if (!symbol) {
-    return NextResponse.json(
-      { error: "symbol is required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "symbol is required" }, { status: 400 });
   }
 
   try {
-    const res = await fetch(
-      `${BINANCE_BASE}/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`,
-      { cache: "no-store" }
-    );
-    const data = await res.json();
-
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: data.msg || "Failed to fetch price", details: data },
-        { status: res.status }
-      );
+    const r = market === "futures"
+      ? await publicGet("futures", "/fapi/v1/ticker/price", { symbol })
+      : await publicGet("spot", "/api/v3/ticker/price", { symbol });
+    const data = r.data as { symbol?: string; price?: string; msg?: string };
+    if (!r.ok) {
+      return NextResponse.json({ error: data.msg || "Failed to fetch price", details: data }, { status: r.status });
     }
-
     return NextResponse.json({ symbol: data.symbol, price: data.price });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "เชื่อมต่อ Binance ไม่ได้" },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: errorMessage(err) }, { status: 502 });
   }
 }
