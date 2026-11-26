@@ -69,16 +69,26 @@ export function TopBar({ symbol, interval, onInterval, lastClose, changePct, bar
           </select>
         </div>
 
-        <div className="ml-auto flex items-center gap-1">
-          <Button variant="outline" size="lg" onClick={onOpenData} className="gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <Button variant="outline" size="lg" onClick={onOpenData} className="gap-1.5 px-2 sm:px-2.5" aria-label="ข้อมูลแท่งเทียน">
             {loading ? <CircleNotch size={14} className="animate-spin" /> : <Database size={14} />}
-            <span className="tabular-nums">{barCount > 0 ? `${barCount.toLocaleString()} แท่ง` : "ข้อมูล"}</span>
+            {barCount > 0 ? (
+              <>
+                {/* Phone: "40K" so the row keeps room for Binance Trading */}
+                <span className="tabular-nums sm:hidden">{barCount >= 10_000 ? `${Math.round(barCount / 1000)}K` : barCount.toLocaleString()}</span>
+                <span className="hidden tabular-nums sm:inline">{barCount.toLocaleString()} แท่ง</span>
+              </>
+            ) : (
+              <span>ข้อมูล</span>
+            )}
           </Button>
           <Link
             href="/trading/Binance"
-            className="hidden h-9 items-center border px-2.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground md:inline-flex"
+            className="inline-flex h-9 items-center whitespace-nowrap border px-2 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground sm:px-2.5"
           >
-            Binance Trading
+            {/* Very narrow phones (< 380px) keep the header to two rows with the short label */}
+            <span className="min-[380px]:hidden">Binance</span>
+            <span className="hidden min-[380px]:inline">Binance Trading</span>
           </Link>
           <ThemeToggle />
         </div>

@@ -21,6 +21,7 @@ import {
 } from "lightweight-charts";
 import { ComputeCache, planRun } from "@/lib/engine/registry";
 import type { Bars, IndicatorDef, PanePlot, Params, PlotOutput, SeriesPlot, Trade } from "@/lib/engine/types";
+import { ArrowsVertical } from "@phosphor-icons/react";
 import { fmtPrice } from "../lib/format";
 
 export interface ChartIndicator {
@@ -428,9 +429,29 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
     return () => cancelAnimationFrame(raf);
   }, [focus, bars, compact]);
 
+  /** Fit the Y axis only: every pane's price scale back to auto-scale (the time range is left as it is) */
+  const fitPriceAxis = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const pane of chart.panes()) {
+      try { pane.priceScale("right").applyOptions({ autoScale: true }); } catch { /* pane without a right scale */ }
+    }
+    chart.priceScale("vol").applyOptions({ autoScale: true });
+  };
+
   return (
     <div className="relative w-full" style={{ height }}>
       <div ref={containerRef} className="absolute inset-0" />
+      {/* Sits in the empty corner where the time axis meets the price axis */}
+      <button
+        type="button"
+        onClick={fitPriceAxis}
+        title="ปรับแกนราคา (แกน Y) ให้พอดีกับแท่งที่เห็นอยู่ · ไม่เลื่อนช่วงเวลา"
+        aria-label="ปรับแกนราคาให้พอดี"
+        className="absolute bottom-0.5 right-0.5 z-10 flex h-6 items-center gap-1 border bg-background/90 px-1.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur transition-colors hover:border-primary hover:text-foreground"
+      >
+        <ArrowsVertical size={12} weight="bold" /> พอดี
+      </button>
       <div
         ref={legendRef}
         className="pointer-events-none absolute left-2 top-1.5 z-10 flex flex-wrap gap-x-2 text-[10px] tabular-nums text-muted-foreground"

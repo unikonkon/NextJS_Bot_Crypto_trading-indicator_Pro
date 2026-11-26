@@ -55,6 +55,8 @@ interface Props {
 export function SymbolPicker({ open, onClose, symbol, onPick, selected, onSelected, startMulti, onTest, barsPerCoin }: Props) {
   const [query, setQuery] = useState("");
   const [multi, setMulti] = useState(!!startMulti);
+  // Focus the search box only with a mouse: on touch screens the keyboard would cover the coin list
+  const [focusSearch] = useState(() => typeof window !== "undefined" && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
   const selSet = useMemo(() => new Set(selected), [selected]);
   const [cat, setCat] = useLocalState("klines.symbolCat", "popular");
   const [recent, setRecent] = useLocalState<string[]>("klines.recentSymbols", []);
@@ -177,7 +179,7 @@ export function SymbolPicker({ open, onClose, symbol, onPick, selected, onSelect
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`ค้นหาจาก ${allCoins.length.toLocaleString()} เหรียญ`}
               className="h-10 pl-8 pr-8 uppercase"
-              autoFocus
+              autoFocus={focusSearch}
               autoCapitalize="characters"
               aria-label="ค้นหาเหรียญ"
             />
