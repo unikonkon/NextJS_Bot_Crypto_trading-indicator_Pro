@@ -249,6 +249,8 @@ export function runBacktest(bars: Bars, signals: ArrayLike<number>, cfg: Backtes
 /**
  * Exposure engine — the strategy states its target position per bar (decided at the
  * close, executed at the next bar's open), like the v3 `simulateExposure` "next_open" mode.
+ * With opts.fill = "close" the target is executed at the close of the same bar instead
+ * (Pine strategies that enter on `close`); intrabar exits are applied first.
  * exitFill[i] closes the position inside bar i at that price (v4 SL/TP).
  * Cost is charged per side on the traded notional.
  */
@@ -262,34 +264,40 @@ export function runExposure(bars: Bars, out: ExposureOutput, cfg: BacktestConfig
 
   const regime = opts.regime ?? null;
   let blocked = 0;
-  for (let i = start; i < n; i++) {
-    // 1) Execute the target set at the previous close, at this bar's open
-    let tgt = target(i - 1);
+  const closeFill = opts.fill === "close";
+  /** Move to the target decided at the close of bar d, filling at `price` on bar i */
+  const execute = (d: number, i: number, price: number) => {
+    let tgt = target(d);
     const p = book.pos;
     if (regime && tgt !== 0) {
       // Higher-timeframe filter: a position already held on this side may stay (but not grow);
       // a new one opens only when the strategy itself enters, on the higher timeframe's side.
       const s = Math.sign(tgt);
-      const ok = regime[i - 1] === s;
+      const ok = regime[d] === s;
       if (p && sideSign(p.side) === s) {
         if (!ok) tgt = s * Math.min(Math.abs(tgt), p.size);
-      } else if (!ok || target(i - 2) === tgt) {
-        if (!ok && target(i - 2) !== tgt) blocked++;
+      } else if (!ok || target(d - 1) === tgt) {
+        if (!ok && target(d - 1) !== tgt) blocked++;
         tgt = 0;
       }
     }
     const cur = p ? sideSign(p.side) * p.size : 0;
-    if (tgt !== cur) {
-      if (p && (tgt === 0 || Math.sign(tgt) !== sideSign(p.side))) book.close(i, bars.open[i], "signal");
-      if (tgt !== 0 && !book.pos) {
-        book.open(tgt > 0 ? "long" : "short", Math.abs(tgt), i, bars.open[i], i);
-      } else if (tgt !== 0 && book.pos) {
-        // Same side, different size: resize and pay cost on the change
-        const delta = Math.abs(Math.abs(tgt) - book.pos.size);
-        book.equity = Math.max(0, book.equity * (1 - (delta * costPct) / 100));
-        book.pos.size = Math.abs(tgt);
-      }
+    if (tgt === cur) return;
+    if (p && (tgt === 0 || Math.sign(tgt) !== sideSign(p.side))) book.close(i, price, "signal");
+    if (tgt !== 0 && !book.pos) {
+      // stopsFrom only positions the entry note: the decision bar is i (close fill) or i − 1 (next open)
+      book.open(tgt > 0 ? "long" : "short", Math.abs(tgt), i, price, closeFill ? i + 1 : i);
+    } else if (tgt !== 0 && book.pos) {
+      // Same side, different size: resize and pay cost on the change
+      const delta = Math.abs(Math.abs(tgt) - book.pos.size);
+      book.equity = Math.max(0, book.equity * (1 - (delta * costPct) / 100));
+      book.pos.size = Math.abs(tgt);
     }
+  };
+
+  for (let i = start; i < n; i++) {
+    // 1) next-open mode: execute the target set at the previous close, at this bar's open
+    if (!closeFill) execute(i - 1, i, bars.open[i]);
 
     // 2) Exit inside the bar (stop / target touched)
     const ef = exitFill?.[i];
@@ -298,6 +306,9 @@ export function runExposure(bars: Bars, out: ExposureOutput, cfg: BacktestConfig
       const won = sideSign(q.side) * (ef - q.entryPrice) >= 0;
       book.close(i, ef, won ? "takeProfit" : "stopLoss");
     }
+
+    // 3) close mode: the strategy acts at this bar's close (after any intrabar exit)
+    if (closeFill) execute(i, i, bars.close[i]);
 
     book.mark(i);
   }
@@ -318,7 +329,7 @@ export function runExposure(bars: Bars, out: ExposureOutput, cfg: BacktestConfig
     signals: sigArr,
     reasons: opts.reasons ?? null,
     engine: "exposure",
-    fill: "nextOpen",
+    fill: closeFill ? "close" : "nextOpen",
     direction,
     startIndex: start,
     warmupBars: opts.warmupBars ?? start,

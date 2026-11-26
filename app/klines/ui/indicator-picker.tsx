@@ -22,6 +22,7 @@ export function SourceBadge({ source, className }: { source: Source; className?:
     v3: "border-violet-500/40 text-violet-500",
     v4: "border-amber-500/40 text-amber-500",
     v5: "border-emerald-500/40 text-emerald-500",
+    v6: "border-pink-500/40 text-pink-500",
   };
   return <span className={cn("shrink-0 border px-1 text-[9px] font-semibold uppercase", tone[source], className)}>{source}</span>;
 }

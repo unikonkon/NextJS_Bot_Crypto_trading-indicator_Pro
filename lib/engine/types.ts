@@ -43,10 +43,12 @@ export interface ParamDef {
   visibleWhen?: { key: string; value: number };
   /** Shown but not editable (e.g. a mode the original source removed) */
   locked?: boolean;
+  /** Choice list (value = option index) — rendered as a select instead of a number */
+  options?: string[];
 }
 
 /** Where an indicator comes from — shown as a badge and usable as a filter */
-export type Source = "v1" | "v2" | "v3" | "v4" | "v5";
+export type Source = "v1" | "v2" | "v3" | "v4" | "v5" | "v6";
 
 export const SOURCE_LABELS: Record<Source, string> = {
   v1: "V1 · ชุดเดิม",
@@ -54,6 +56,7 @@ export const SOURCE_LABELS: Record<Source, string> = {
   v3: "V3 · OrderFlow",
   v4: "V4 · YouTube",
   v5: "V5 · SMC LuxAlgo",
+  v6: "V6 · Pine Pennant",
 };
 
 /** How positions are filled: at the close of the signal bar, or at the next bar's open */
@@ -80,7 +83,7 @@ export interface ExposureOutput {
 export type EngineKind =
   | { kind: "signal" }
   /** Strategy manages its own entries/exits; direction is fixed by the strategy */
-  | { kind: "exposure"; direction: TradeMode };
+  | { kind: "exposure"; direction: TradeMode; /** default next open */ fill?: FillMode };
 
 export type Params = Record<string, number>;
 
@@ -124,6 +127,8 @@ export interface SegmentPlot {
   from: number;
   to: number;
   value: number;
+  /** Value at `to` for a sloped segment (defaults to `value`) */
+  value2?: number;
   color: string;
   width?: 1 | 2 | 3 | 4;
   style?: 0 | 1 | 2 | 3;

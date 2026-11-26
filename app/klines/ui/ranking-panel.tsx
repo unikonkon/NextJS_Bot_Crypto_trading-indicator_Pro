@@ -12,7 +12,7 @@ import { fmtPct, toneClass } from "../lib/format";
 
 export type RankScope = "all" | "fav" | Category | Source;
 
-const SOURCE_SET = new Set<string>(["v1", "v2", "v3", "v4", "v5"]);
+const SOURCE_SET = new Set<string>(["v1", "v2", "v3", "v4", "v5", "v6"]);
 export function inScope(d: IndicatorDef, scope: RankScope, favorites: string[]): boolean {
   if (scope === "all") return true;
   if (scope === "fav") return favorites.includes(d.id);

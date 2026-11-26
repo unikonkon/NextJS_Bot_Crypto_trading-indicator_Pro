@@ -242,7 +242,7 @@ export default function PriceChart({ bars, indicators, trades, showTrades, compa
           color: seg.color, lineWidth: seg.width ?? 1, lineStyle: seg.style ?? 0,
           priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
         }, 0);
-        api.setData([{ time: times[seg.from], value: seg.value }, { time: times[seg.to], value: seg.value }]);
+        api.setData([{ time: times[seg.from], value: seg.value }, { time: times[seg.to], value: seg.value2 ?? seg.value }]);
         indicatorSeriesRef.current.push(api);
       }
       for (const pane of plot.panes ?? []) {

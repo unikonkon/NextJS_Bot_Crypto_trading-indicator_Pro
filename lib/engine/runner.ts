@@ -37,7 +37,7 @@ export function runJob(cache: ComputeCache, job: RunJob): JobOutput {
   if (engine.kind === "exposure") {
     if (!def.exposure) throw new Error(`${def.id}: exposure() missing`);
     result = runExposure(bars, def.exposure(r, bars, params), job.config, engine.direction, {
-      startIndex: ctx.startIndex, reasons, warmupBars: warmup, ...filter,
+      startIndex: ctx.startIndex, reasons, warmupBars: warmup, fill: engine.fill ?? "nextOpen", ...filter,
     });
   } else {
     const fill: FillMode = job.config.fill === "auto" ? def.defaultFill ?? "close" : job.config.fill;

@@ -33,6 +33,7 @@ import vwap from "./vwap";
 import obv from "./obv";
 import { V2_DEFS } from "./v2";
 import { V3_DEFS } from "./v3";
+import { PENNANT_DEFS } from "./pennant";
 
 export const INDICATORS: IndicatorDef[] = [
   rsi,
@@ -58,4 +59,6 @@ export const INDICATORS: IndicatorDef[] = [
   ...V2_DEFS,
   // lib/indicators-v3/v4/v5 — exposure strategies with their own exits
   ...V3_DEFS,
+  // lib/indicators-pennant.ts — Pennant Triangle [1h] (Craig Percoco) from Pine
+  ...PENNANT_DEFS,
 ];

@@ -13,7 +13,7 @@ function sourceOf(id: string): Source {
   return "v3";
 }
 
-const CATEGORY: Record<Source, Category> = { v1: "trend", v2: "trend", v3: "volume", v4: "trend", v5: "structure" };
+const CATEGORY: Record<Source, Category> = { v1: "trend", v2: "trend", v3: "volume", v4: "trend", v5: "structure", v6: "structure" };
 
 function directionOf(d: { allowLong: number; allowShort: number }): TradeMode {
   if (d.allowLong >= 0.5 && d.allowShort >= 0.5) return "both";

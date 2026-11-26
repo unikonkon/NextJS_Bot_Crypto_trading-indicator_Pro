@@ -122,6 +122,26 @@ function ParamField({ pd, value, onChange }: { pd: ParamDef; value: number; onCh
       </label>
     );
   }
+  if (pd.options) {
+    return (
+      <label className="block space-y-1.5">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="text-[11px] font-medium">
+            {pd.label}
+            {changed && <span className="ml-1.5 text-[9px] text-amber-500">ค่าเริ่มต้น {pd.options[pd.default]}</span>}
+          </span>
+        </span>
+        <select
+          value={Math.round(value)}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="h-9 w-full border bg-background px-2 text-xs outline-none focus:border-ring"
+        >
+          {pd.options.map((o, i) => <option key={o} value={i}>{o}</option>)}
+        </select>
+        {pd.hint && <span className="block text-[10px] text-muted-foreground">{pd.hint}</span>}
+      </label>
+    );
+  }
   // Very wide ranges (e.g. bar counts up to millions) get a plain input — a slider would be useless
   const sliderOk = (pd.max - pd.min) / pd.step <= 5000;
   return (
@@ -315,7 +335,7 @@ export function StrategyPanel(props: Props) {
             <LockSimple size={14} className="mt-px shrink-0 text-muted-foreground" />
             <span>
               <b>{MODE_LABEL[engine.direction]}</b>
-              <span className="block text-[10px] text-muted-foreground">กลยุทธ์นี้กำหนดทิศทางและจังหวะเข้า-ออกเอง (ตามต้นฉบับ) · เข้า-ออกที่{FILL_LABEL.nextOpen}</span>
+              <span className="block text-[10px] text-muted-foreground">กลยุทธ์นี้กำหนดทิศทางและจังหวะเข้า-ออกเอง (ตามต้นฉบับ) · เข้า-ออกที่{FILL_LABEL[engine.fill ?? "nextOpen"]}</span>
             </span>
           </div>
         ) : (
