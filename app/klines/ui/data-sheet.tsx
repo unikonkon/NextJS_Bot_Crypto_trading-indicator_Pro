@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DownloadSimple, FileCsv, Stop, Warning } from "@phosphor-icons/react";
+import { Check, DownloadSimple, FileCsv, Files, Play, Ranking, Stop, Warning } from "@phosphor-icons/react";
 import { Sheet } from "@/components/ui/sheet";
 import { Segmented } from "@/components/ui/segmented";
 import { Button } from "@/components/ui/button";
@@ -80,10 +80,19 @@ interface Props {
   warmup: number;
   /** Most bars "latest" will fetch (evaluation + warm-up) */
   maxBars: number;
+  /** Tab to open on (defaults to the current data source) */
+  initialTab?: "latest" | "range" | "csv";
+  /** Files picked for multi-file runs */
+  selected: string[];
+  onSelect: (files: string[]) => void;
+  onRankFiles: () => void;
+  onCompareFiles: () => void;
 }
 
+const BIG_FILE = 100_000;
+
 export function DataSheet(p: Props) {
-  const [tab, setTab] = useState<"latest" | "range" | "csv">(p.source?.kind ?? "latest");
+  const [tab, setTab] = useState<"latest" | "range" | "csv">(p.initialTab ?? p.source?.kind ?? "latest");
   const [limit, setLimit] = useState(p.source?.kind === "latest" ? p.source.limit : 1000);
   const [preset, setPreset] = useState<string | null>(null);
   const [start, setStart] = useState(() => (p.source?.kind === "range" ? toLocalInput(p.source.start) : ""));
@@ -106,6 +115,13 @@ export function DataSheet(p: Props) {
   };
   const presetLabel = RANGES.find((r) => r.id === preset)?.label;
 
+  const sel = p.csvFiles.filter((f) => p.selected.includes(f.file));
+  const selBars = sel.reduce((n, f) => n + f.bars, 0);
+  const toggle = (file: string) => p.onSelect(p.selected.includes(file) ? p.selected.filter((x) => x !== file) : [...p.selected, file]);
+  const allNames = p.csvFiles.map((f) => f.file);
+  const smallNames = p.csvFiles.filter((f) => f.bars <= BIG_FILE).map((f) => f.file);
+  const same = (a: string[]) => a.length === sel.length && a.every((x) => p.selected.includes(x));
+
   const priceChange = p.firstPrice && p.lastPrice ? (p.lastPrice / p.firstPrice - 1) * 100 : null;
 
   return (
@@ -116,6 +132,21 @@ export function DataSheet(p: Props) {
       description={`${p.symbol} · ${p.interval}`}
       footer={
         <div className="space-y-2">
+          {tab === "csv" && (
+            <div className="space-y-1.5 border-b pb-2.5">
+              <p className="text-[10px] tabular-nums text-muted-foreground">
+                เลือก {sel.length}/{p.csvFiles.length} ไฟล์{sel.length > 0 && ` · รวม ${selBars.toLocaleString()} แท่ง`}
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button size="lg" disabled={sel.length === 0} onClick={() => { p.onRankFiles(); p.onClose(); }}>
+                  <Ranking size={14} /> จัดอันดับ {sel.length || ""} ไฟล์
+                </Button>
+                <Button size="lg" variant="outline" disabled={sel.length === 0} onClick={() => { p.onCompareFiles(); p.onClose(); }}>
+                  <Play size={13} weight="fill" /> ทดสอบกลยุทธ์
+                </Button>
+              </div>
+            </div>
+          )}
           {p.barCount > 0 && p.firstTime !== null && p.lastTime !== null && (
             <div className="space-y-0.5 text-[10px] tabular-nums text-muted-foreground">
               <p>
@@ -228,36 +259,64 @@ export function DataSheet(p: Props) {
 
         {tab === "csv" && (
           <div className="space-y-2">
-            <p className="text-[11px] text-muted-foreground">ไฟล์ใน app/getData/data/dataShowUI · กดเพื่อโหลด (เปลี่ยนคู่เหรียญและ TF ตามไฟล์)</p>
+            <p className="text-[11px] text-muted-foreground">
+              ไฟล์ใน app/getData/data/dataShowUI · ติ๊กเลือกเพื่อรันหลายไฟล์ในแท็บกลยุทธ์และจัดอันดับ · กดที่ชื่อไฟล์เพื่อโหลดขึ้นกราฟ
+            </p>
+            {p.csvFiles.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1">
+                <Files size={13} className="mr-0.5 text-muted-foreground" />
+                {[
+                  { label: `ทั้งหมด ${allNames.length}`, names: allNames },
+                  ...(smallNames.length < allNames.length ? [{ label: `ไม่รวมไฟล์ใหญ่ ${smallNames.length}`, names: smallNames }] : []),
+                ].map((o) => (
+                  <button key={o.label} type="button" onClick={() => p.onSelect(o.names)}
+                    className={cn("h-7 border px-2 text-[10px] font-medium", same(o.names) ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
+                    {o.label}
+                  </button>
+                ))}
+                {sel.length > 0 && (
+                  <button type="button" onClick={() => p.onSelect([])} className="h-7 border px-2 text-[10px] font-medium text-muted-foreground hover:text-foreground">ล้าง</button>
+                )}
+              </div>
+            )}
             {p.csvFiles.length === 0 && <p className="py-6 text-center text-xs text-muted-foreground">ไม่พบไฟล์</p>}
             {p.csvFiles.map((f) => {
               const active = p.source?.kind === "csv" && p.source.file === f.file;
+              const on = p.selected.includes(f.file);
               const chg = f.open ? (f.close / f.open - 1) * 100 : 0;
               return (
-                <button key={f.file} type="button" disabled={p.loading}
-                  onClick={() => { p.onCsv(f); p.onClose(); }}
-                  className={cn("flex w-full items-start gap-2.5 border px-3 py-2 text-left hover:bg-muted disabled:opacity-50", active && "border-primary bg-primary/5")}>
-                  <FileCsv size={18} className="mt-0.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <p className="flex items-baseline gap-1.5 text-xs">
-                      <span className="font-semibold">{f.symbol ?? f.file.replace(/\.csv$/, "")}</span>
-                      {f.interval && <span className="bg-muted px-1 font-medium tabular-nums">{f.interval}</span>}
-                      {active && <span className="text-[10px] font-medium text-primary">กำลังใช้</span>}
-                      <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                        {f.bars.toLocaleString()} แท่ง · {fmtSize(f.size)}
-                      </span>
-                    </p>
-                    <p className="text-[10px] tabular-nums text-muted-foreground">
-                      {fmtDate(f.from, true)} → {fmtDate(f.to, true)} · {fmtDays(f.to - f.from)}
-                    </p>
-                    <p className="text-[10px] tabular-nums">
-                      <span className="text-muted-foreground">ราคา</span> {fmtPrice(f.open)} → {fmtPrice(f.close)}{" "}
-                      <span className={toneClass(chg)}>{fmtPct(chg)}</span>
-                      <span className="text-muted-foreground"> · สูง {fmtPrice(f.high)} · ต่ำ {fmtPrice(f.low)}</span>
-                    </p>
-                    {f.bars > 100_000 && <p className="text-[10px] text-amber-600 dark:text-amber-500">ไฟล์ใหญ่ · โหลดและคำนวณช้ากว่าปกติ</p>}
-                  </div>
-                </button>
+                <div key={f.file} className={cn("flex w-full items-stretch border", active ? "border-primary bg-primary/5" : on && "border-primary/40")}>
+                  <button type="button" role="checkbox" aria-checked={on} aria-label={`เลือก ${f.file}`} onClick={() => toggle(f.file)}
+                    className="grid w-11 shrink-0 place-items-center border-r hover:bg-muted">
+                    <span className={cn("grid size-4 place-items-center border", on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/50")}>
+                      {on && <Check size={11} weight="bold" />}
+                    </span>
+                  </button>
+                  <button type="button" disabled={p.loading} title="โหลดไฟล์นี้ขึ้นกราฟ"
+                    onClick={() => { p.onCsv(f); p.onClose(); }}
+                    className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2 text-left hover:bg-muted disabled:opacity-50">
+                    <FileCsv size={18} className="mt-0.5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <p className="flex items-baseline gap-1.5 text-xs">
+                        <span className="font-semibold">{f.symbol ?? f.file.replace(/\.csv$/, "")}</span>
+                        {f.interval && <span className="bg-muted px-1 font-medium tabular-nums">{f.interval}</span>}
+                        {active && <span className="text-[10px] font-medium text-primary">บนกราฟ</span>}
+                        <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                          {f.bars.toLocaleString()} แท่ง · {fmtSize(f.size)}
+                        </span>
+                      </p>
+                      <p className="text-[10px] tabular-nums text-muted-foreground">
+                        {fmtDate(f.from, true)} → {fmtDate(f.to, true)} · {fmtDays(f.to - f.from)}
+                      </p>
+                      <p className="text-[10px] tabular-nums">
+                        <span className="text-muted-foreground">ราคา</span> {fmtPrice(f.open)} → {fmtPrice(f.close)}{" "}
+                        <span className={toneClass(chg)}>{fmtPct(chg)}</span>
+                        <span className="text-muted-foreground"> · สูง {fmtPrice(f.high)} · ต่ำ {fmtPrice(f.low)}</span>
+                      </p>
+                      {f.bars > BIG_FILE && <p className="text-[10px] text-amber-600 dark:text-amber-500">ไฟล์ใหญ่ · โหลดและคำนวณช้ากว่าปกติ</p>}
+                    </div>
+                  </button>
+                </div>
               );
             })}
           </div>

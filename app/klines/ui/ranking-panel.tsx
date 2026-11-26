@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Play, Stop, TrendUp, TrendDown, Warning, Cpu, Check, X, Plus, Funnel } from "@phosphor-icons/react";
+import { Play, Stop, TrendUp, TrendDown, Warning, Cpu, Check, X, Plus, Funnel, Files } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ import {
 } from "@/lib/engine/types";
 import { SourceBadge } from "./indicator-picker";
 import { Sparkline } from "./equity-chart";
+import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 import { fmtPct, toneClass } from "../lib/format";
 
 export type RankScope = "all" | "fav" | Category | Source;
@@ -39,6 +40,87 @@ export interface RankRow {
   error?: string;
   /** Higher-timeframe filter of this run (null = no filter) */
   filter: RankFilter | null;
+  /** CSV file the run used (multi-file ranking) */
+  file?: string;
+  /** Cross-file summary row: no-filter return averaged over the same files (for the Δ) */
+  baseReturn?: number;
+  agg?: RankAgg;
+}
+
+export interface RankAgg {
+  /** Files that ran / files tried */
+  n: number;
+  total: number;
+  profitable: number;
+  worst: { file: string; ret: number };
+  best: { file: string; ret: number };
+}
+
+export type RankSource = "chart" | "files";
+
+/** Short label of a file: "1h", or "ETHUSDT 1h" when it is not the main pair */
+export function fileLabel(file: string, infos: CsvFileInfo[]): string {
+  const f = infos.find((x) => x.file === file);
+  if (!f) return file.replace(/\.csv$/, "");
+  const symbols = new Set(infos.map((x) => x.symbol));
+  return symbols.size > 1 ? `${f.symbol ?? ""} ${f.interval ?? ""}`.trim() : f.interval ?? f.file.replace(/\.csv$/, "");
+}
+
+/** Average each strategy × filter over the files it ran on */
+function aggregate(rows: RankRow[]): RankRow[] {
+  const baseBy = new Map<string, number>();
+  for (const r of rows) if (!r.filter && r.summary) baseBy.set(`${r.id}|${r.file}`, r.summary.totalReturnPct);
+  const groups = new Map<string, RankRow[]>();
+  for (const r of rows) {
+    const k = `${r.id}|${filterKey(r.filter)}`;
+    const g = groups.get(k);
+    if (g) g.push(r);
+    else groups.set(k, [r]);
+  }
+  return [...groups.values()].map((g) => {
+    const { id, name, source, category, filter } = g[0];
+    const ok = g.filter((r) => r.summary);
+    if (!ok.length) return { id, name, source, category, filter, summary: null, error: g[0].error };
+    const ss = ok.map((r) => r.summary!);
+    const avg = (f: (s: BacktestSummary) => number) => ss.reduce((a, s) => a + f(s), 0) / ss.length;
+    const sum = (f: (s: BacktestSummary) => number) => ss.reduce((a, s) => a + f(s), 0);
+    const pfs = ss.map((s) => s.profitFactor).filter(Number.isFinite);
+    const s0 = ss[0];
+    const summary: BacktestSummary = {
+      ...s0,
+      totalReturnPct: avg((s) => s.totalReturnPct),
+      winRate: avg((s) => s.winRate),
+      wins: sum((s) => s.wins),
+      losses: sum((s) => s.losses),
+      totalTrades: sum((s) => s.totalTrades),
+      maxDrawdownPct: avg((s) => s.maxDrawdownPct),
+      sharpeRatio: avg((s) => s.sharpeRatio),
+      profitFactor: pfs.length ? pfs.reduce((a, b) => a + b, 0) / pfs.length : Infinity,
+      buyAndHoldPct: avg((s) => s.buyAndHoldPct),
+      exposurePct: avg((s) => s.exposurePct),
+      long: { ...s0.long, trades: sum((s) => s.long.trades), returnPct: avg((s) => s.long.returnPct) },
+      short: { ...s0.short, trades: sum((s) => s.short.trades), returnPct: avg((s) => s.short.returnPct) },
+      htf: s0.htf ? { ...s0.htf, bullBars: sum((s) => s.htf?.bullBars ?? 0), bearBars: sum((s) => s.htf?.bearBars ?? 0), unknownBars: sum((s) => s.htf?.unknownBars ?? 0) } : null,
+      spark: [],
+    };
+    let worst = ok[0];
+    let best = ok[0];
+    for (const r of ok) {
+      if (r.summary!.totalReturnPct < worst.summary!.totalReturnPct) worst = r;
+      if (r.summary!.totalReturnPct > best.summary!.totalReturnPct) best = r;
+    }
+    // Δ of a filter is measured against the no-filter runs of the same files
+    const bases = filter ? ok.map((r) => baseBy.get(`${r.id}|${r.file}`)).filter((b): b is number => b !== undefined) : [];
+    return {
+      id, name, source, category, filter, summary,
+      baseReturn: bases.length ? bases.reduce((a, b) => a + b, 0) / bases.length : undefined,
+      agg: {
+        n: ok.length, total: g.length, profitable: ss.filter((s) => s.totalReturnPct > 0).length,
+        worst: { file: worst.file ?? "", ret: worst.summary!.totalReturnPct },
+        best: { file: best.file ?? "", ret: best.summary!.totalReturnPct },
+      },
+    };
+  });
 }
 
 /** Grid of higher-timeframe filters the ranking tries (persisted) */
@@ -108,6 +190,15 @@ interface Props {
   onCancel: () => void;
   onApply: (row: RankRow) => void;
   onApplyFilter: (f: RankFilter | null) => void;
+  /** Data the ranking runs on: the chart's bars or the selected CSV files */
+  source: RankSource;
+  onSource: (s: RankSource) => void;
+  /** Selected CSV files / every CSV file (for labels) */
+  files: CsvFileInfo[];
+  allFiles: CsvFileInfo[];
+  onPickFiles: () => void;
+  /** What a multi-file run is doing now */
+  stage: string | null;
 }
 
 // ─── Filter grid settings ────────────────────────────────────
@@ -186,14 +277,14 @@ function HtfGrid(p: Props) {
           {/* 2) timeframes */}
           <div className="space-y-1.5">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[11px] font-medium">Timeframe ที่ใช้คิด <span className="text-muted-foreground">{tfs.length} ค่า · ใหญ่กว่ากราฟ ({p.chartTf})</span></span>
+              <span className="text-[11px] font-medium">Timeframe ที่ใช้คิด <span className="text-muted-foreground">{tfs.length} ค่า · ใหญ่กว่า{p.source === "files" ? "ไฟล์ TF เล็กสุด" : "กราฟ"} ({p.chartTf})</span></span>
               <span className="flex gap-1">
                 <SmallButton onClick={() => set({ intervals: p.tfChoices })} active={tfs.length === p.tfChoices.length && tfs.length > 0}>ทั้งหมด</SmallButton>
                 <SmallButton onClick={() => set({ intervals: p.tfChoices.filter((t) => RECOMMENDED_TFS.has(t)) })}>★ แนะนำ</SmallButton>
               </span>
             </div>
             {p.tfChoices.length === 0 ? (
-              <p className="text-[10px] text-amber-500">ไม่มี timeframe ที่ใหญ่กว่ากราฟ — เปลี่ยนกราฟเป็น timeframe ที่เล็กลง</p>
+              <p className="text-[10px] text-amber-500">{p.source === "files" ? "ไม่มี timeframe ที่ใหญ่กว่าไฟล์ที่เลือก" : "ไม่มี timeframe ที่ใหญ่กว่ากราฟ — เปลี่ยนกราฟเป็น timeframe ที่เล็กลง"}</p>
             ) : (
               <div className="grid grid-cols-5 gap-1">
                 {p.tfChoices.map((tf) => {
@@ -214,7 +305,7 @@ function HtfGrid(p: Props) {
 
           {/* 3) size of the run */}
           <p className={cn("border-l-2 px-2 py-1 text-[10px] tabular-nums", p.runs > 5000 ? "border-amber-500 text-amber-500" : "border-primary/50 text-muted-foreground")}>
-            {p.strategies} กลยุทธ์ × ({v.filters.length} ตัวกรอง × {tfs.length} TF + ไม่กรอง) = <b>{p.runs.toLocaleString()}</b> รอบ
+            {p.strategies} กลยุทธ์ × ({v.filters.length} ตัวกรอง × {tfs.length} TF + ไม่กรอง){p.source === "files" && ` × ${p.files.length} ไฟล์ (เฉพาะ TF ที่ใหญ่กว่าไฟล์)`} = <b>{p.runs.toLocaleString()}</b> รอบ
             {p.runs > 5000 && " · หลายพันรอบ อาจใช้เวลาหลายสิบวินาที"}
           </p>
           <p className="text-[10px] leading-snug text-muted-foreground">
@@ -240,7 +331,8 @@ function FilterBadge({ f }: { f: RankFilter | null }) {
   );
 }
 
-function RowItem({ row, rank, base, active, onApply }: { row: RankRow; rank: number | null; base: number | undefined; active: boolean; onApply: () => void }) {
+function RowItem({ row, rank, base, active, onApply, allFiles }: { row: RankRow; rank: number | null; base: number | undefined; active: boolean; onApply: () => void; allFiles: CsvFileInfo[] }) {
+  const a = row.agg;
   const s = row.summary;
   const delta = s && row.filter && base !== undefined ? s.totalReturnPct - base : null;
   return (
@@ -262,6 +354,14 @@ function RowItem({ row, rank, base, active, onApply }: { row: RankRow; rank: num
             <FilterBadge f={row.filter} />
             {delta !== null && <span className={cn("shrink-0 text-[10px] tabular-nums", toneClass(delta))}>{fmtPct(delta, 1)} จากไม่กรอง</span>}
           </div>
+          {a && (
+            <p className="flex flex-wrap gap-x-2 text-[10px] tabular-nums text-muted-foreground">
+              <span>กำไร <b className={a.profitable === a.n ? "text-emerald-500" : a.profitable === 0 ? "text-red-500" : "text-foreground"}>{a.profitable}/{a.n}</b> ไฟล์</span>
+              {a.n > 1 && <span>แย่สุด {fileLabel(a.worst.file, allFiles)} <span className={toneClass(a.worst.ret)}>{fmtPct(a.worst.ret, 0)}</span></span>}
+              {a.n > 1 && <span>ดีสุด {fileLabel(a.best.file, allFiles)} <span className={toneClass(a.best.ret)}>{fmtPct(a.best.ret, 0)}</span></span>}
+              {a.n < a.total && <span className="text-amber-500">รันไม่ได้ {a.total - a.n} ไฟล์</span>}
+            </p>
+          )}
           {s ? (
             <div className="flex items-center gap-2">
               <p className="flex min-w-0 flex-1 flex-wrap gap-x-2 text-[10px] tabular-nums text-muted-foreground">
@@ -300,6 +400,7 @@ export function RankingPanel(p: Props) {
   const [sort, setSort] = useState<SortKey>("return");
   const [view, setView] = useState<View>("filters");
   const [limit, setLimit] = useState(PAGE);
+  const [fileView, setFileView] = useState("all");
   const all = listIndicators();
   const scopeCount = (s: RankScope) => all.filter((d) => inScope(d, s, p.favorites)).length;
   const scopes: RankScope[] = ["all", "fav", ...sourcesInUse(), ...categoriesInUse()];
@@ -307,36 +408,46 @@ export function RankingPanel(p: Props) {
     s === "all" ? "ทั้งหมด" : s === "fav" ? "★ โปรด" : SOURCE_SET.has(s) ? SOURCE_LABELS[s as Source].split(" · ")[0] : CATEGORY_LABELS[s as Category];
   const activeView: View = p.grid ? view : "all";
 
+  // Multi-file results: the cross-file average, or one file's rows
+  const resultFiles = useMemo(() => [...new Set((p.rows ?? []).map((r) => r.file).filter((f): f is string => !!f))], [p.rows]);
+  const multi = resultFiles.length > 0;
+  const curFile = multi && resultFiles.includes(fileView) ? fileView : "all";
+  const rows = useMemo(() => {
+    if (!p.rows || !multi) return p.rows;
+    return curFile === "all" ? aggregate(p.rows) : p.rows.filter((r) => r.file === curFile);
+  }, [p.rows, multi, curFile]);
+
   // No-filter return of each strategy — the baseline every filter is compared with
   const base = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of p.rows ?? []) if (!r.filter && r.summary) m.set(r.id, r.summary.totalReturnPct);
+    for (const r of rows ?? []) if (!r.filter && r.summary) m.set(r.id, r.summary.totalReturnPct);
     return m;
-  }, [p.rows]);
+  }, [rows]);
+  const baseOf = (r: RankRow) => r.baseReturn ?? base.get(r.id);
 
   const list = useMemo(() => {
-    if (!p.rows) return null;
-    let rows = p.rows;
+    if (!rows) return null;
+    let rows2 = rows;
     if (activeView === "best") {
       // The best run of each strategy (its own no-filter run included); failures listed once
       const bestBy = new Map<string, RankRow>();
-      for (const r of rows) {
+      for (const r of rows2) {
         if (!r.summary) continue;
         const cur = bestBy.get(r.id);
         if (!cur || sortValue(r.summary, sort) > sortValue(cur.summary!, sort)) bestBy.set(r.id, r);
       }
-      rows = [...bestBy.values(), ...rows.filter((r) => !r.filter && !r.summary)];
+      rows2 = [...bestBy.values(), ...rows2.filter((r) => !r.filter && !r.summary)];
     }
-    const ok = rows.filter((r) => r.summary).sort((a, b) => sortValue(b.summary!, sort) - sortValue(a.summary!, sort));
-    return [...ok, ...rows.filter((r) => !r.summary)];
-  }, [p.rows, sort, activeView]);
+    const ok = rows2.filter((r) => r.summary).sort((a, b) => sortValue(b.summary!, sort) - sortValue(a.summary!, sort));
+    return [...ok, ...rows2.filter((r) => !r.summary)];
+  }, [rows, sort, activeView]);
 
   const filterStats = useMemo<FilterStat[] | null>(() => {
-    if (!p.rows || !p.grid) return null;
+    if (!rows || !p.grid) return null;
     const groups = new Map<string, FilterStat & { sumRet: number; sumDelta: number; sumUnknown: number }>();
-    for (const r of p.rows) {
+    for (const r of rows) {
       if (!r.summary) continue;
-      const b = base.get(r.id);
+      const b = r.baseReturn ?? base.get(r.id);
       if (b === undefined) continue;
       const k = filterKey(r.filter);
       let g = groups.get(k);
@@ -353,22 +464,22 @@ export function RankingPanel(p: Props) {
     return [...groups.values()]
       .map((g) => ({ ...g, avgReturn: g.sumRet / g.n, avgDelta: g.sumDelta / g.n, unknown: g.sumUnknown / g.n }))
       .sort((a, b) => b.avgDelta - a.avgDelta || b.avgReturn - a.avgReturn);
-  }, [p.rows, p.grid, base]);
+  }, [rows, p.grid, base]);
 
   const insight = useMemo(() => {
     if (!list) return null;
     // the grid's "all pairs" view would count each strategy many times — use the unfiltered runs there
-    const src = p.grid && activeView !== "best" ? (p.rows ?? []).filter((r) => !r.filter) : list;
+    const src = p.grid && activeView !== "best" ? (rows ?? []).filter((r) => !r.filter) : list;
     const ok = src.filter((r) => r.summary).map((r) => r.summary!);
     if (!ok.length) return null;
     return {
-      label: p.grid && activeView !== "best" ? "ไม่กรอง" : activeView === "best" ? "คู่ที่ดีสุด" : "",
+      label: [multi ? (curFile === "all" ? `เฉลี่ย ${resultFiles.length} ไฟล์` : fileLabel(curFile, p.allFiles)) : "", p.grid && activeView !== "best" ? "ไม่กรอง" : activeView === "best" ? "คู่ที่ดีสุด" : ""].filter(Boolean).join(" · "),
       profitable: ok.filter((s) => s.totalReturnPct > 0).length,
       beatHold: ok.filter((s) => s.totalReturnPct > s.buyAndHoldPct).length,
       total: ok.length,
       hold: ok[0].buyAndHoldPct,
     };
-  }, [p.rows, list, activeView, p.grid]);
+  }, [rows, list, activeView, p.grid, multi, curFile, resultFiles.length, p.allFiles]);
 
   const pct = p.progress ? Math.round((p.progress.done / Math.max(1, p.progress.total)) * 100) : 0;
   const gridReady = !p.rankHtf.enabled || (p.rankHtf.filters.length > 0 && p.rankHtf.intervals.some((i) => p.tfChoices.includes(i)));
@@ -377,7 +488,41 @@ export function RankingPanel(p: Props) {
   return (
     <div className="space-y-4 p-4">
       <section className="space-y-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">1 · กลยุทธ์ที่จะจัดอันดับ</h3>
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">1 · ข้อมูลที่ใช้ทดสอบ</h3>
+        <Segmented<RankSource>
+          size="sm"
+          value={p.source}
+          onChange={p.onSource}
+          options={[
+            { value: "chart", label: `กราฟ ${p.source === "chart" ? p.chartTf : ""} · ${p.barCount.toLocaleString()} แท่ง` },
+            { value: "files", label: `ไฟล์ที่เลือก (${p.files.length})` },
+          ]}
+        />
+        {p.source === "files" && (
+          <div className="space-y-1.5">
+            {p.files.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {p.files.map((f) => (
+                  <span key={f.file} className="inline-flex h-6 items-center border bg-background px-1.5 text-[10px] tabular-nums">
+                    {fileLabel(f.file, p.allFiles)} <span className="ml-1 text-muted-foreground">{f.bars.toLocaleString()}</span>
+                  </span>
+                ))}
+                <SmallButton onClick={p.onPickFiles}><Files size={10} className="mr-0.5 inline" />แก้ไข…</SmallButton>
+              </div>
+            ) : (
+              <p className="flex items-center gap-2 text-[10px] text-amber-500">
+                ยังไม่ได้เลือกไฟล์ <SmallButton onClick={p.onPickFiles}><Files size={10} className="mr-0.5 inline" />เลือกไฟล์…</SmallButton>
+              </p>
+            )}
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              รันทีละไฟล์ (ไม่กระทบกราฟ) · ประเมินทั้งไฟล์ แต่ละ indicator เริ่มหลังช่วงอุ่นเครื่องของตัวเอง · ผลรวมเป็นค่าเฉลี่ยของทุกไฟล์ที่รันได้
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">2 · กลยุทธ์ที่จะจัดอันดับ</h3>
         <div className="flex flex-wrap gap-1.5">
           {scopes.map((s) => {
             const n = scopeCount(s);
@@ -396,7 +541,7 @@ export function RankingPanel(p: Props) {
       </section>
 
       <div className="space-y-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">2 · ตัวกรองเทรนด์ใหญ่ (ไม่บังคับ)</h3>
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">3 · ตัวกรองเทรนด์ใหญ่ (ไม่บังคับ)</h3>
         <HtfGrid {...p} />
       </div>
 
@@ -405,8 +550,8 @@ export function RankingPanel(p: Props) {
           <div className="flex items-center justify-between text-[11px] tabular-nums">
             <span>
               {p.htfLoading ? `กำลังโหลดข้อมูล ${HTF_LABELS[p.htfLoading]}…`
-                : p.progress ? `กำลังรัน ${p.progress.done.toLocaleString()}/${p.progress.total.toLocaleString()} รอบ`
-                  : "กำลังเตรียมข้อมูล…"}
+                : p.progress && p.progress.total > 0 ? `กำลังรัน ${p.progress.done.toLocaleString()}/${p.progress.total.toLocaleString()} รอบ${p.stage ? ` · ${p.stage}` : ""}`
+                  : p.stage ?? "กำลังเตรียมข้อมูล…"}
             </span>
             <span className="text-muted-foreground">{pct}%</span>
           </div>
@@ -414,11 +559,15 @@ export function RankingPanel(p: Props) {
           <Button variant="destructive" size="lg" className="w-full" onClick={p.onCancel}><Stop size={14} weight="fill" /> ยกเลิก</Button>
         </div>
       ) : (
-        <Button size="lg" className="h-11 w-full text-sm" onClick={() => { setLimit(PAGE); p.onRun(); }} disabled={p.strategies === 0 || p.barCount < 50 || !gridReady}>
-          <Play size={14} weight="fill" /> {p.rankHtf.enabled ? `รัน ${p.runs.toLocaleString()} รอบ (หาคู่ที่ดีที่สุด)` : `รัน Backtest ${p.strategies} indicator`}
+        <Button size="lg" className="h-11 w-full text-sm" onClick={() => { setLimit(PAGE); setFileView("all"); p.onRun(); }}
+          disabled={p.strategies === 0 || (p.source === "files" ? p.files.length === 0 : p.barCount < 50) || !gridReady}>
+          <Play size={14} weight="fill" />{" "}
+          {p.source === "files"
+            ? `รัน ${p.runs.toLocaleString()} รอบ บน ${p.files.length} ไฟล์`
+            : p.rankHtf.enabled ? `รัน ${p.runs.toLocaleString()} รอบ (หาคู่ที่ดีที่สุด)` : `รัน Backtest ${p.strategies} indicator`}
         </Button>
       )}
-      {p.barCount > 0 && p.barCount < 50 && <p className="text-[11px] text-amber-500">ต้องมีอย่างน้อย 50 แท่งเทียน</p>}
+      {p.source === "chart" && p.barCount > 0 && p.barCount < 50 && <p className="text-[11px] text-amber-500">ต้องมีอย่างน้อย 50 แท่งเทียน</p>}
 
       {p.stale && list && (
         <p className="flex gap-1.5 border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[10px] text-amber-500">
@@ -448,6 +597,13 @@ export function RankingPanel(p: Props) {
               </select>
             )}
           </div>
+          {multi && (
+            <select value={curFile} onChange={(e) => { setFileView(e.target.value); setLimit(PAGE); }} aria-label="ดูผลของไฟล์"
+              className="h-9 w-full border bg-background px-2 text-[11px] outline-none focus:border-ring">
+              <option value="all">ดูผล: เฉลี่ยทุกไฟล์ ({resultFiles.length} ไฟล์)</option>
+              {resultFiles.map((f) => <option key={f} value={f}>ดูผล: เฉพาะ {fileLabel(f, p.allFiles)}</option>)}
+            </select>
+          )}
           {p.grid && (
             <Segmented<View>
               size="sm"
@@ -456,7 +612,7 @@ export function RankingPanel(p: Props) {
               options={[
                 { value: "filters", label: "สรุปตามตัวกรอง" },
                 { value: "best", label: "ดีสุดต่อกลยุทธ์" },
-                { value: "all", label: `ทุกคู่ ${(p.rows?.length ?? 0).toLocaleString()}` },
+                { value: "all", label: `ทุกคู่ ${(rows?.length ?? 0).toLocaleString()}` },
               ]}
             />
           )}
@@ -500,8 +656,8 @@ export function RankingPanel(p: Props) {
             <>
               <ol className="divide-y border">
                 {list.slice(0, limit).map((row, i) => (
-                  <RowItem key={`${row.id}|${filterKey(row.filter)}`} row={row} rank={row.summary ? i + 1 : null}
-                    base={base.get(row.id)} active={isApplied(row)} onApply={() => p.onApply(row)} />
+                  <RowItem key={`${row.id}|${filterKey(row.filter)}|${row.file ?? ""}`} row={row} rank={row.summary ? i + 1 : null}
+                    base={baseOf(row)} active={isApplied(row)} onApply={() => p.onApply(row)} allFiles={p.allFiles} />
                 ))}
               </ol>
               {list.length > limit && (
@@ -509,7 +665,9 @@ export function RankingPanel(p: Props) {
                   แสดงเพิ่ม (เหลือ {(list.length - limit).toLocaleString()} แถว)
                 </Button>
               )}
-              <p className="text-[10px] text-muted-foreground">แตะแถวเพื่อใช้กลยุทธ์ + ตัวกรองนั้นบนกราฟ</p>
+              <p className="text-[10px] text-muted-foreground">
+                แตะแถวเพื่อใช้กลยุทธ์ + ตัวกรองนั้นบนกราฟ{multi && (curFile === "all" ? " · ตัวเลขเป็นค่าเฉลี่ยของทุกไฟล์ (เทรดเป็นยอดรวม)" : " · และโหลดไฟล์นี้ขึ้นกราฟ")}
+              </p>
             </>
           )}
         </section>

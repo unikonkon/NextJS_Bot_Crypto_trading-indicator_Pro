@@ -8,7 +8,7 @@ import { toBars } from "@/lib/engine/math";
 import { detectTfMinutes, getIndicator, htfApplies, htfIndicator, htfIndicatorWarmup, htfWarmupBars, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
 import { htfTrend, normalizeHtf } from "@/lib/engine/htf";
 import { getPool, AbortedError } from "@/lib/engine/worker/pool";
-import { DEFAULT_CONFIG, HTF_INTERVALS, HTF_LABELS, HTF_MINUTES, type BacktestConfig, type BacktestResult, type Bars, type HtfInterval, type IndicatorDef, type PanePlot, type Params } from "@/lib/engine/types";
+import { DEFAULT_CONFIG, HTF_INTERVALS, HTF_LABELS, HTF_MINUTES, type BacktestConfig, type BacktestResult, type BacktestSummary, type Bars, type HtfInterval, type IndicatorDef, type PanePlot, type Params } from "@/lib/engine/types";
 import { useKlineData } from "./lib/use-kline-data";
 import { useHtfSets, type HtfWant } from "./lib/use-htf-data";
 import { useLocalState } from "./lib/use-local-state";
@@ -20,7 +20,10 @@ import PriceChart, { type ChartIndicator } from "./ui/price-chart";
 import { IndicatorPicker } from "./ui/indicator-picker";
 import { StrategyPanel } from "./ui/strategy-panel";
 import { ResultsPanel } from "./ui/results-panel";
-import { DEFAULT_RANK_HTF, RankingPanel, inScope, type RankHtf, type RankRow, type RankScope } from "./ui/ranking-panel";
+import { DEFAULT_RANK_HTF, RankingPanel, inScope, type RankHtf, type RankRow, type RankScope, type RankSource } from "./ui/ranking-panel";
+import { FileCompare, type CompareRow } from "./ui/file-compare";
+import { fileTfMinutes, runOnFiles } from "./lib/batch";
+import type { CsvFileInfo } from "@/app/api/dataShowUI/route";
 
 type MobileTab = "chart" | "strategy" | "results" | "ranking";
 
@@ -49,6 +52,9 @@ export default function KlinesPage() {
   const [overlayIds, setOverlayIds] = useLocalState<string[]>("klines.overlays", []);
   const [showTrades, setShowTrades] = useLocalState("klines.showTrades", true);
   const [rankScope, setRankScope] = useLocalState<RankScope>("klines.rankScope", "all");
+  /** CSV files picked for multi-file runs, and whether the ranking uses them */
+  const [batchFiles, setBatchFiles] = useLocalState<string[]>("klines.batchFiles", []);
+  const [rankSource, setRankSource] = useLocalState<RankSource>("klines.rankSource", "chart");
 
   // Wait one commit so persisted values are loaded before the first fetch
   const [ready, setReady] = useState(false);
@@ -59,6 +65,8 @@ export default function KlinesPage() {
   const [sideTab, setSideTab] = useState<SideTab>("strategy");
   const [picker, setPicker] = useState<null | "strategy" | "overlay" | "filters">(null);
   const [dataOpen, setDataOpen] = useState(false);
+  const [dataTab, setDataTab] = useState<"latest" | "range" | "csv" | undefined>(undefined);
+  const openData = useCallback((tab?: "latest" | "range" | "csv") => { setDataTab(tab); setDataOpen(true); }, []);
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -142,7 +150,15 @@ export default function KlinesPage() {
   const htfLabel = `${htfInd.def.name} ${HTF_LABELS[htfCfg.interval]}`;
 
   const [rankHtf, setRankHtf] = useLocalState<RankHtf>("klines.rankHtf", DEFAULT_RANK_HTF);
-  const tfChoices = useMemo(() => HTF_INTERVALS.filter((i) => HTF_MINUTES[i] > dataTfMinutes), [dataTfMinutes]);
+  const selectedFiles = useMemo(() => data.csvFiles.filter((f) => batchFiles.includes(f.file)), [data.csvFiles, batchFiles]);
+  const filesMode = rankSource === "files";
+  // Multi-file ranking: the filter timeframes must be larger than the smallest selected file's
+  const minFileTf = useMemo(() => {
+    const tfs = selectedFiles.map(fileTfMinutes).filter((m) => m > 0);
+    return tfs.length ? Math.min(...tfs) : 0;
+  }, [selectedFiles]);
+  const rankTfBase = filesMode ? minFileTf : dataTfMinutes;
+  const tfChoices = useMemo(() => (rankTfBase > 0 ? HTF_INTERVALS.filter((i) => HTF_MINUTES[i] > rankTfBase) : []), [rankTfBase]);
   const gridFilters = useMemo(() => (rankHtf.enabled ? rankHtf.filters.filter((id) => getIndicator(id)) : []), [rankHtf]);
   const gridTfs = useMemo(() => (rankHtf.enabled ? rankHtf.intervals.filter((i) => tfChoices.includes(i)) : []), [rankHtf, tfChoices]);
   const gridOn = gridFilters.length > 0 && gridTfs.length > 0;
@@ -235,20 +251,80 @@ export default function KlinesPage() {
   const result = single && single.bars === bars ? single.result : null;
 
   // ─── Ranking (many indicators in parallel, same evaluation window) ──
-  const [rank, setRank] = useState<{ rows: RankRow[]; bars: Bars; configKey: string; grid: boolean } | null>(null);
+  const [rank, setRank] = useState<{ rows: RankRow[]; bars: Bars; configKey: string; grid: boolean; files: boolean } | null>(null);
+  const [rankStage, setRankStage] = useState<string | null>(null);
   const [rankRunning, setRankRunning] = useState(false);
   const [rankProgress, setRankProgress] = useState<{ done: number; total: number } | null>(null);
   const [rankPending, setRankPending] = useState<{ since: Date | null } | null>(null);
   const rankCtrl = useRef<AbortController | null>(null);
   const rankDefs = useMemo(() => listIndicators().filter((d) => inScope(d, rankScope, favorites)), [rankScope, favorites]);
-  const rankRuns = rankDefs.length * (gridOn ? gridFilters.length * gridTfs.length + 1 : 1);
+  const rankRuns = filesMode
+    ? selectedFiles.reduce((n, f) => {
+        const tf = fileTfMinutes(f);
+        const tfs = gridOn && tf > 0 ? gridTfs.filter((t) => HTF_MINUTES[t] > tf).length : 0;
+        return n + rankDefs.length * (gridFilters.length * tfs + 1);
+      }, 0)
+    : rankDefs.length * (gridOn ? gridFilters.length * gridTfs.length + 1 : 1);
+  const filesKey = selectedFiles.map((f) => `${f.file}:${f.size}:${f.to}`).join(",");
   // The ranking itself never uses the single-run filter: it is either unfiltered or the grid
   const rankConfig = useMemo<BacktestConfig>(() => ({ ...config, htf: { ...htfCfg, enabled: false } }), [config, htfCfg]);
-  const configKey = `${JSON.stringify(rankConfig)}|${evalBars ?? "all"}|${gridOn ? `${gridFilters.join(",")}@${gridTfs.join(",")}` : "nogrid"}`;
+  const configKey = `${JSON.stringify(rankConfig)}|${filesMode ? `files=${filesKey}` : evalBars ?? "all"}|${gridOn ? `${gridFilters.join(",")}@${gridTfs.join(",")}` : "nogrid"}`;
   const gridLoaded = gridTfs.every((tf) => !!htf.sets[tf]);
+
+  /** Ranking over the selected CSV files (own worker pool, one file at a time) */
+  const runFilesRanking = useCallback(async () => {
+    const defs = rankDefs;
+    const files = selectedFiles;
+    if (!defs.length || !files.length) return;
+    rankCtrl.current?.abort();
+    const ctrl = new AbortController();
+    rankCtrl.current = ctrl;
+    setRankRunning(true);
+    setRankProgress(null);
+    setRankStage("กำลังเตรียมไฟล์…");
+    type Meta = { def: IndicatorDef; filter: RankRow["filter"] };
+    try {
+      const res = await runOnFiles<Meta>({
+        files,
+        fallbackSymbol: symbol,
+        signal: ctrl.signal,
+        onProgress: (done, total, stage) => { setRankProgress({ done, total }); setRankStage(stage); },
+        jobsFor: (_file, tf) => {
+          const jobs = [];
+          for (const d of defs) {
+            jobs.push({ job: { indicatorId: d.id, params: paramsById[d.id], config: rankConfig, full: false }, meta: { def: d, filter: null } });
+            if (!gridOn || tf <= 0) continue;
+            for (const id of gridFilters) for (const t of gridTfs) {
+              if (HTF_MINUTES[t] <= tf) continue; // the filter must be a larger timeframe than the file
+              jobs.push({
+                job: { indicatorId: d.id, params: paramsById[d.id], config: { ...rankConfig, htf: { enabled: true, interval: t, indicator: id, params: { [id]: paramsById[id] ?? {} } } }, full: false },
+                meta: { def: d, filter: { indicator: id, interval: t } },
+              });
+            }
+          }
+          return jobs;
+        },
+      });
+      const rows: RankRow[] = res.map(({ file, meta: { def: d, filter }, out }) => {
+        const base = { id: d.id, name: d.name, category: d.category, source: sourceOf(d), filter, file: file.file };
+        return out instanceof Error ? { ...base, summary: null, error: out.message } : { ...base, summary: out as BacktestSummary };
+      });
+      setRank({ rows, bars, configKey, grid: gridOn, files: true });
+    } catch (err) {
+      if (!(err instanceof AbortedError)) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (rankCtrl.current === ctrl) {
+        setRankRunning(false);
+        setRankProgress(null);
+        setRankStage(null);
+        rankCtrl.current = null;
+      }
+    }
+  }, [rankDefs, selectedFiles, symbol, paramsById, rankConfig, gridOn, gridFilters, gridTfs, bars, configKey, setError]);
 
   const runRanking = useCallback(async (afterReload = false) => {
     const defs = rankDefs;
+    if (filesMode) { await runFilesRanking(); return; }
     if (!defs.length || bars.length < 50) return;
     // Every indicator must be evaluated on the same window → load enough history for the longest warm-up first
     const maxWarm = Math.max(0, ...defs.map((d) => warmupOf(d, normalizeParams(d, paramsById[d.id]), tfMinutes)));
@@ -292,7 +368,7 @@ export default function KlinesPage() {
         const base = { id: d.id, name: d.name, category: d.category, source: sourceOf(d), filter };
         return o instanceof Error ? { ...base, summary: null, error: o.message } : { ...base, summary: o as RankRow["summary"] };
       });
-      setRank({ rows, bars, configKey, grid: gridOn });
+      setRank({ rows, bars, configKey, grid: gridOn, files: false });
     } catch (err) {
       if (!(err instanceof AbortedError)) setError(String(err));
     } finally {
@@ -303,7 +379,7 @@ export default function KlinesPage() {
       }
     }
   }, [rankDefs, bars, paramsById, rankConfig, configKey, setError, tfMinutes, isLatest, limit, evalBars, data.loadedAt,
-    gridOn, gridFilters, gridTfs, gridLoaded, htf.loading, htfError]);
+    gridOn, gridFilters, gridTfs, gridLoaded, htf.loading, htfError, filesMode, runFilesRanking]);
 
   // Run the ranking once the extra history (chart warm-up and grid timeframes) has arrived
   useEffect(() => {
@@ -323,7 +399,53 @@ export default function KlinesPage() {
     setRankPending(null);
     setRankRunning(false);
   }, []);
-  const rankStale = !!rank && (rank.bars !== bars || rank.configKey !== configKey);
+  const rankStale = !!rank && (rank.configKey !== configKey || (!rank.files && rank.bars !== bars));
+
+  // ─── Current strategy on every selected file (strategy tab) ──
+  const [compare, setCompare] = useState<{ rows: CompareRow[]; key: string } | null>(null);
+  const [compareRunning, setCompareRunning] = useState(false);
+  const [compareProgress, setCompareProgress] = useState<{ done: number; total: number; stage: string } | null>(null);
+  const compareCtrl = useRef<AbortController | null>(null);
+  const compareKey = `${def.id}|${JSON.stringify(params)}|${JSON.stringify(config)}|${filesKey}`;
+
+  const runCompare = useCallback(async () => {
+    const files = selectedFiles;
+    if (!files.length) return;
+    compareCtrl.current?.abort();
+    const ctrl = new AbortController();
+    compareCtrl.current = ctrl;
+    setCompareRunning(true);
+    setCompareProgress(null);
+    try {
+      const res = await runOnFiles({
+        files,
+        fallbackSymbol: symbol,
+        signal: ctrl.signal,
+        onProgress: (done, total, stage) => setCompareProgress({ done, total, stage }),
+        jobsFor: () => [{ job: { indicatorId: def.id, params, config, full: false }, meta: null }],
+      });
+      setCompare({
+        key: compareKey,
+        rows: res.map(({ file, out }) => (out instanceof Error ? { file, summary: null, error: out.message } : { file, summary: out as BacktestSummary })),
+      });
+    } catch (err) {
+      if (!(err instanceof AbortedError)) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (compareCtrl.current === ctrl) {
+        setCompareRunning(false);
+        setCompareProgress(null);
+        compareCtrl.current = null;
+      }
+    }
+  }, [selectedFiles, symbol, def, params, config, compareKey, setError]);
+  const cancelCompare = useCallback(() => compareCtrl.current?.abort(), []);
+
+  // Started from the data sheet: run once the new selection / source is in state
+  const [autoRun, setAutoRun] = useState<null | "rank" | "compare">(null);
+  useEffect(() => {
+    if (autoRun === "rank" && filesMode && !rankRunning) { setAutoRun(null); void runRanking(); }
+    else if (autoRun === "compare" && !compareRunning) { setAutoRun(null); void runCompare(); }
+  }, [autoRun, filesMode, rankRunning, compareRunning, runRanking, runCompare]);
 
   // ─── Navigation helpers ───────────────────────────────────
   const showResults = useCallback(() => {
@@ -331,8 +453,26 @@ export default function KlinesPage() {
     else setMobileTab("results");
   }, [isDesktop]);
 
+  /** Put a CSV file on the chart, following its pair / timeframe without refetching from Binance */
+  const { loadCsv } = data;
+  const activeFile = data.source?.kind === "csv" ? data.source.file : null;
+  const loadFileToChart = useCallback((f: CsvFileInfo) => {
+    const sym = f.symbol ?? symbol;
+    const tf = f.interval && (INTERVALS as readonly string[]).includes(f.interval) ? (f.interval as Interval) : interval;
+    if (sym !== symbol || tf !== interval) {
+      csvMarketRef.current = `${sym}|${tf}`;
+      setSymbol(sym);
+      setInterval(tf);
+    }
+    loadCsv(f.file);
+  }, [symbol, interval, setSymbol, setInterval, loadCsv]);
+
   /** Use a ranking row on the chart: its strategy and its filter (or no filter) */
   const applyFromRanking = useCallback((row: RankRow) => {
+    if (row.file && row.file !== activeFile) {
+      const f = data.csvFiles.find((x) => x.file === row.file);
+      if (f) loadFileToChart(f);
+    }
     setStrategyId(row.id);
     setConfig((c) => {
       const h = normalizeHtf(c.htf);
@@ -346,7 +486,7 @@ export default function KlinesPage() {
     });
     if (!isDesktop) setMobileTab("chart");
     else window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [isDesktop, setStrategyId, setConfig, paramsById]);
+  }, [isDesktop, setStrategyId, setConfig, paramsById, activeFile, data.csvFiles, loadFileToChart]);
 
   /** Apply only a filter (from the per-filter summary) to the current strategy */
   const applyFilter = useCallback((f: NonNullable<RankRow["filter"]> | null) => {
@@ -378,7 +518,7 @@ export default function KlinesPage() {
         changePct={changePct}
         barCount={evalBars ?? bars.length}
         loading={data.loading}
-        onOpenData={() => setDataOpen(true)}
+        onOpenData={() => openData()}
       />
 
       {data.error && (
@@ -507,6 +647,20 @@ export default function KlinesPage() {
               onClearHtf={() => setConfig((c) => ({ ...c, htf: { ...normalizeHtf(c.htf), enabled: false } }))}
               onFindHtf={goRanking}
             />
+            <FileCompare
+              strategyName={def.name}
+              files={selectedFiles}
+              allFiles={data.csvFiles}
+              rows={compare?.rows ?? null}
+              running={compareRunning}
+              progress={compareProgress}
+              stale={!!compare && compare.key !== compareKey}
+              activeFile={activeFile}
+              onRun={() => void runCompare()}
+              onCancel={cancelCompare}
+              onPickFiles={() => openData("csv")}
+              onLoadFile={loadFileToChart}
+            />
           </section>
           <section className={sideVis("ranking")}>
             <RankingPanel
@@ -526,7 +680,7 @@ export default function KlinesPage() {
               rankHtf={rankHtf}
               onRankHtf={setRankHtf}
               tfChoices={tfChoices}
-              chartTf={interval}
+              chartTf={filesMode ? selectedFiles.find((f) => fileTfMinutes(f) === minFileTf)?.interval ?? "—" : interval}
               runs={rankRuns}
               strategies={rankDefs.length}
               htfLoading={rankRunning && rankPending ? htf.loading : null}
@@ -535,6 +689,12 @@ export default function KlinesPage() {
               onCancel={cancelRanking}
               onApply={applyFromRanking}
               onApplyFilter={applyFilter}
+              source={rankSource}
+              onSource={setRankSource}
+              files={selectedFiles}
+              allFiles={data.csvFiles}
+              onPickFiles={() => openData("csv")}
+              stage={rankStage}
             />
           </section>
         </aside>
@@ -608,6 +768,11 @@ export default function KlinesPage() {
         firstPrice={bars.length ? bars.open[0] : null}
         lastPrice={bars.length ? bars.close[bars.length - 1] : null}
         maxBars={MAX_BARS}
+        initialTab={dataTab}
+        selected={batchFiles}
+        onSelect={setBatchFiles}
+        onRankFiles={() => { setRankSource("files"); goRanking(); setAutoRun("rank"); }}
+        onCompareFiles={() => { setSideTab("strategy"); setMobileTab("strategy"); setAutoRun("compare"); }}
         loadedAt={data.loadedAt}
         loading={data.loading}
         progress={data.progress}
@@ -620,17 +785,7 @@ export default function KlinesPage() {
         }}
         warmup={neededWarmup}
         onRange={(s, e) => loadRange(symbol, interval, s, e)}
-        onCsv={(f) => {
-          // Follow the file's pair / timeframe so the top bar, warm-up and filters match the data
-          const sym = f.symbol ?? symbol;
-          const tf = f.interval && (INTERVALS as readonly string[]).includes(f.interval) ? (f.interval as Interval) : interval;
-          if (sym !== symbol || tf !== interval) {
-            csvMarketRef.current = `${sym}|${tf}`;
-            setSymbol(sym);
-            setInterval(tf);
-          }
-          data.loadCsv(f.file);
-        }}
+        onCsv={loadFileToChart}
         onCancel={data.cancel}
         onDownload={() => data.downloadCsv(`${symbol}_${interval}`)}
       />

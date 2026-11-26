@@ -12,7 +12,7 @@ export type DataSource =
 const PAGE = 1000;
 
 /** Sort ascending and drop duplicate openTimes (charts require strictly increasing time) */
-function normalize(rows: KlineData[]): KlineData[] {
+export function normalizeKlines(rows: KlineData[]): KlineData[] {
   const sorted = [...rows].sort((a, b) => a.openTime - b.openTime);
   const out: KlineData[] = [];
   for (const k of sorted) {
@@ -52,7 +52,7 @@ export async function fetchKlinesRange(
   return all;
 }
 
-function parseCsv(text: string): KlineData[] {
+export function parseCsv(text: string): KlineData[] {
   return text.trim().split("\n").slice(1).map((line) => {
     const c = line.split(",");
     return {
@@ -96,7 +96,7 @@ export function useKlineData() {
     setError(null);
     setProgress(null);
     try {
-      const rows = normalize(await task(ctrl.signal));
+      const rows = normalizeKlines(await task(ctrl.signal));
       if (ctrl.signal.aborted) return;
       if (rows.length === 0) throw new Error("ไม่พบข้อมูลในช่วงที่เลือก");
       setKlines(rows);
