@@ -2,7 +2,7 @@ import type { KlineData } from "@/lib/types/kline";
 import { toBars } from "../math";
 import { ComputeCache } from "../registry";
 import { runJob, type JobOutput, type RunJob } from "../runner";
-import type { BacktestResult, BacktestSummary, HtfInterval } from "../types";
+import type { BacktestResult, BacktestSummary, Bars, HtfInterval } from "../types";
 import type { WorkerRequest, WorkerResponse } from "./protocol";
 
 interface Task {
@@ -42,7 +42,7 @@ export class BacktestPool {
   private datasetId = 0;
   private klines: KlineData[] = [];
   private htfId = 0;
-  private htf: { interval: HtfInterval | null; klines: KlineData[] | null } = { interval: null, klines: null };
+  private htf: Partial<Record<HtfInterval, KlineData[]>> = {};
   private inlineCache: ComputeCache | null = null;
   private inlineMode = false;
   private inlineBusy = false;
@@ -98,14 +98,18 @@ export class BacktestPool {
     for (const s of this.slots) if (s.task) { s.task.aborted = true; s.task.reject(new AbortedError()); }
   }
 
-  /** Replace the higher-timeframe bars used by the trend filter. Queued jobs are cancelled. */
-  setHtf(interval: HtfInterval | null, klines: KlineData[] | null): void {
+  /** Replace the higher-timeframe bars (by interval) used by the trend filter. Queued jobs are cancelled. */
+  setHtf(sets: Partial<Record<HtfInterval, KlineData[]>>): void {
     this.htfId++;
-    this.htf = { interval, klines };
-    this.inlineCache?.setHtf(interval, klines ? toBars(klines) : null);
+    this.htf = sets;
+    this.inlineCache?.setHtf(this.htfBars());
     const stale = this.queue;
     this.queue = [];
     for (const t of stale) { t.aborted = true; t.reject(new AbortedError()); }
+  }
+
+  private htfBars(): Partial<Record<HtfInterval, Bars>> {
+    return Object.fromEntries(Object.entries(this.htf).map(([k, v]) => [k, toBars(v!)]));
   }
 
   run(job: RunJob & { full: true }, signal?: AbortSignal): Promise<BacktestResult>;
@@ -156,7 +160,8 @@ export class BacktestPool {
       if (!task) return;
       if (task.datasetId !== this.datasetId || task.htfId !== this.htfId) { task.reject(new AbortedError()); continue; }
       if (slot.htfId !== this.htfId) {
-        slot.worker.postMessage({ type: "htf", htfId: this.htfId, ...this.htf } satisfies WorkerRequest);
+        const sets = Object.entries(this.htf).map(([interval, klines]) => ({ interval: interval as HtfInterval, klines: klines! }));
+        slot.worker.postMessage({ type: "htf", htfId: this.htfId, sets } satisfies WorkerRequest);
         slot.htfId = this.htfId;
       }
       if (slot.datasetId !== this.datasetId) {
@@ -179,7 +184,7 @@ export class BacktestPool {
         if (task.datasetId === this.datasetId && !task.aborted) {
           if (!this.inlineCache) {
             this.inlineCache = new ComputeCache(toBars(this.klines));
-            this.inlineCache.setHtf(this.htf.interval, this.htf.klines ? toBars(this.htf.klines) : null);
+            this.inlineCache.setHtf(this.htfBars());
           }
           task.resolve(runJob(this.inlineCache, task.job));
         }

@@ -92,14 +92,20 @@ export function htfApplies(f: HtfFilter | undefined, tfMinutes: number): f is Ht
 /** Indicator + params the higher-timeframe filter runs (stored params normalized to the indicator) */
 export function htfIndicator(f: HtfFilter) {
   const h = normalizeHtf(f);
-  const def = getIndicator(h.indicator)!;
-  return { def, params: normalizeParams(def, h.params[h.indicator]), filter: h };
+  const def = getIndicator(h.indicator) ?? getIndicator("ema_cross")!;
+  const filter = def.id === h.indicator ? h : { ...h, indicator: def.id };
+  return { def, params: normalizeParams(def, h.params[def.id]), filter };
 }
 
-/** Higher-timeframe warm-up, in higher-timeframe bars, to fetch before the chart's first bar */
+/** Bars (on the higher timeframe) the filter indicator needs before it is meaningful */
+export function htfIndicatorWarmup(def: IndicatorDef, p: Params, interval: HtfInterval): number {
+  return warmupOf(def, p, HTF_MINUTES[interval]);
+}
+
+/** Higher-timeframe history to fetch before the chart's first bar (capped — monthly/weekly history is short) */
 export function htfWarmupBars(f: HtfFilter): number {
   const { def, params, filter } = htfIndicator(f);
-  return Math.max(60, 3 * warmupOf(def, params, HTF_MINUTES[filter.interval]) + 10);
+  return Math.min(1500, Math.max(60, 2 * htfIndicatorWarmup(def, params, filter.interval) + 10));
 }
 
 /**
@@ -108,18 +114,19 @@ export function htfWarmupBars(f: HtfFilter): number {
  */
 export class ComputeCache {
   private map = new Map<string, unknown>();
-  private htf: { interval: HtfInterval; bars: Bars } | null = null;
-  private trend: { key: string; value: HtfTrend } | null = null;
+  private htf = new Map<HtfInterval, Bars>();
+  /** Higher-timeframe states by filter — a ranking grid cycles through many of them */
+  private trends = new Map<string, HtfTrend>();
   constructor(private bars: Bars, private max = 40) {}
 
   get dataBars(): Bars {
     return this.bars;
   }
 
-  /** Higher-timeframe bars of the same market (for the trend filter) */
-  setHtf(interval: HtfInterval | null, bars: Bars | null) {
-    this.htf = interval && bars ? { interval, bars } : null;
-    this.trend = null;
+  /** Higher-timeframe bars of the same market, by interval (for the trend filter) */
+  setHtf(sets: Partial<Record<HtfInterval, Bars>>) {
+    this.htf = new Map(Object.entries(sets).filter(([, b]) => b && b.length) as [HtfInterval, Bars][]);
+    this.trends.clear();
   }
 
   /**
@@ -128,15 +135,17 @@ export class ComputeCache {
    */
   htfTrend(f: HtfFilter | undefined, tfMinutes: number): HtfTrend | null {
     if (!htfApplies(f, tfMinutes)) return null;
-    if (!this.htf || this.htf.interval !== f!.interval || this.htf.bars.length === 0) {
-      throw new Error(`กำลังโหลดข้อมูล ${HTF_LABELS[f!.interval]} สำหรับตัวกรองเทรนด์…`);
-    }
     const { def, params, filter } = htfIndicator(f!);
+    const bars = this.htf.get(filter.interval);
+    if (!bars) throw new Error(`กำลังโหลดข้อมูล ${HTF_LABELS[filter.interval]} สำหรับตัวกรองเทรนด์…`);
     const key = `${paramsKey(def.id, params)}|${filter.interval}|${tfMinutes}`;
-    if (this.trend?.key !== key) {
-      this.trend = { key, value: htfTrend(this.bars, this.htf.bars, def, params, filter.interval, tfMinutes) };
+    let t = this.trends.get(key);
+    if (!t) {
+      t = htfTrend(this.bars, bars, def, params, filter.interval, tfMinutes, { warmup: htfIndicatorWarmup(def, params, filter.interval) });
+      this.trends.set(key, t);
+      if (this.trends.size > 600) this.trends.delete(this.trends.keys().next().value as string);
     }
-    return this.trend.value;
+    return t;
   }
 
   compute(def: IndicatorDef, p: Params, ctx: ComputeContext): unknown {

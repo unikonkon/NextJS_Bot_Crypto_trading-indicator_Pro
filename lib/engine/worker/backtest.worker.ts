@@ -7,7 +7,7 @@ import type { WorkerRequest, WorkerResponse } from "./protocol";
 
 let datasetId = -1;
 let cache: ComputeCache | null = null;
-let htf: { interval: HtfInterval | null; bars: Bars | null } = { interval: null, bars: null };
+let htf: Partial<Record<HtfInterval, Bars>> = {};
 
 const post = (msg: WorkerResponse) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg);
 
@@ -16,12 +16,12 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   if (msg.type === "load") {
     datasetId = msg.datasetId;
     cache = new ComputeCache(toBars(msg.klines));
-    cache.setHtf(htf.interval, htf.bars);
+    cache.setHtf(htf);
     return;
   }
   if (msg.type === "htf") {
-    htf = { interval: msg.interval, bars: msg.klines ? toBars(msg.klines) : null };
-    cache?.setHtf(htf.interval, htf.bars);
+    htf = Object.fromEntries(msg.sets.map((x) => [x.interval, toBars(x.klines)]));
+    cache?.setHtf(htf);
     return;
   }
   if (msg.type === "run") {

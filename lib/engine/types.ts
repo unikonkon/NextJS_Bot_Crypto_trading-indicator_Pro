@@ -214,21 +214,28 @@ export interface StopRule {
 }
 
 /** Higher timeframe used as a trend filter */
-export type HtfInterval = "4h" | "1d" | "3d" | "1w";
-export const HTF_MINUTES: Record<HtfInterval, number> = { "4h": 240, "1d": 1440, "3d": 4320, "1w": 10080 };
-export const HTF_LABELS: Record<HtfInterval, string> = { "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
+export type HtfInterval = "2h" | "4h" | "6h" | "8h" | "12h" | "1d" | "3d" | "1w" | "1M";
+/** Nominal length in minutes (1M = 30 days; real month ends come from the bars' closeTime) */
+export const HTF_MINUTES: Record<HtfInterval, number> = {
+  "2h": 120, "4h": 240, "6h": 360, "8h": 480, "12h": 720, "1d": 1440, "3d": 4320, "1w": 10080, "1M": 43200,
+};
+export const HTF_LABELS: Record<HtfInterval, string> = {
+  "2h": "2H", "4h": "4H", "6h": "6H", "8h": "8H", "12h": "12H", "1d": "1D", "3d": "3D", "1w": "1W", "1M": "1M",
+};
+export const HTF_INTERVALS = Object.keys(HTF_MINUTES) as HtfInterval[];
 
 /**
  * Multi-timeframe trend filter: one indicator run on the higher timeframe decides the side.
  * After its Buy signal only Long entries are taken, after its Sell signal only Short entries
- * (the state between signals, like trading that indicator). Signals against it can still close
+ * (the state between signals, like trading that indicator) — for strategies that manage their
+ * own exits, the side they hold (flat = unknown). Signals against it can still close
  * a position; a position is never forced out when the higher timeframe flips.
  * Only *closed* higher-timeframe bars are used (no lookahead).
  */
 export interface HtfFilter {
   enabled: boolean;
   interval: HtfInterval;
-  /** Indicator id whose signals define the direction (see HTF_CHOICES) */
+  /** Indicator id whose signals define the direction (any registered indicator) */
   indicator: string;
   /** Params per indicator id — missing keys use the indicator's defaults */
   params: Record<string, Params>;

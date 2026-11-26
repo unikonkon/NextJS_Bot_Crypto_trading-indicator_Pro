@@ -5,12 +5,12 @@ import { ChartLineUp, Faders, ListNumbers, Ranking, Plus, X, TrendUp, TrendDown,
 import { cn } from "@/lib/utils";
 import type { Interval } from "@/lib/types/kline";
 import { toBars } from "@/lib/engine/math";
-import { detectTfMinutes, getIndicator, htfApplies, htfIndicator, htfWarmupBars, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
+import { detectTfMinutes, getIndicator, htfApplies, htfIndicator, htfIndicatorWarmup, htfWarmupBars, listIndicators, normalizeParams, sourceOf, warmupOf } from "@/lib/engine/registry";
 import { htfTrend, normalizeHtf } from "@/lib/engine/htf";
 import { getPool, AbortedError } from "@/lib/engine/worker/pool";
-import { DEFAULT_CONFIG, HTF_LABELS, type BacktestConfig, type BacktestResult, type Bars, type PanePlot, type Params } from "@/lib/engine/types";
+import { DEFAULT_CONFIG, HTF_INTERVALS, HTF_LABELS, HTF_MINUTES, type BacktestConfig, type BacktestResult, type Bars, type HtfInterval, type IndicatorDef, type PanePlot, type Params } from "@/lib/engine/types";
 import { useKlineData } from "./lib/use-kline-data";
-import { useHtfData } from "./lib/use-htf-data";
+import { useHtfSets, type HtfWant } from "./lib/use-htf-data";
 import { useLocalState } from "./lib/use-local-state";
 import { useMediaQuery } from "./lib/use-media";
 import { fmtPct, toneClass } from "./lib/format";
@@ -20,7 +20,7 @@ import PriceChart, { type ChartIndicator } from "./ui/price-chart";
 import { IndicatorPicker } from "./ui/indicator-picker";
 import { StrategyPanel } from "./ui/strategy-panel";
 import { ResultsPanel } from "./ui/results-panel";
-import { RankingPanel, inScope, type RankRow, type RankScope } from "./ui/ranking-panel";
+import { DEFAULT_RANK_HTF, RankingPanel, inScope, type RankHtf, type RankRow, type RankScope } from "./ui/ranking-panel";
 
 type MobileTab = "chart" | "strategy" | "results" | "ranking";
 
@@ -61,7 +61,7 @@ export default function KlinesPage() {
   // ─── UI state ─────────────────────────────────────────────
   const [mobileTab, setMobileTab] = useState<MobileTab>("chart");
   const [sideTab, setSideTab] = useState<SideTab>("strategy");
-  const [picker, setPicker] = useState<null | "strategy" | "overlay">(null);
+  const [picker, setPicker] = useState<null | "strategy" | "overlay" | "filters">(null);
   const [dataOpen, setDataOpen] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -130,31 +130,55 @@ export default function KlinesPage() {
     loadLatest(symbol, interval, desiredTotal);
   }, [ready, data.loading, data.klines.length, isLatest, bars.length, desiredTotal, symbol, interval, loadLatest]);
 
-  // ─── Higher-timeframe trend filter (e.g. CCI on 3D while trading 30m) ──
+  // ─── Higher-timeframe trend filter ────────────────────────
+  // Single run: the filter applied from a ranking row (config.htf).
+  // Ranking: a grid of filter indicators × timeframes, compared with no filter.
   const htfCfg = useMemo(() => normalizeHtf(config.htf), [config.htf]);
   const htfInd = useMemo(() => htfIndicator(htfCfg), [htfCfg]);
   // Same bar spacing the engine detects, so a CSV of another timeframe is handled correctly
   const dataTfMinutes = bars.length > 1 ? detectTfMinutes(bars) : tfMinutes;
   const htfActive = htfApplies(htfCfg, dataTfMinutes);
+  const htfLabel = `${htfInd.def.name} ${HTF_LABELS[htfCfg.interval]}`;
+
+  const [rankHtf, setRankHtf] = useLocalState<RankHtf>("klines.rankHtf", DEFAULT_RANK_HTF);
+  const tfChoices = useMemo(() => HTF_INTERVALS.filter((i) => HTF_MINUTES[i] > dataTfMinutes), [dataTfMinutes]);
+  const gridFilters = useMemo(() => (rankHtf.enabled ? rankHtf.filters.filter((id) => getIndicator(id)) : []), [rankHtf]);
+  const gridTfs = useMemo(() => (rankHtf.enabled ? rankHtf.intervals.filter((i) => tfChoices.includes(i)) : []), [rankHtf, tfChoices]);
+  const gridOn = gridFilters.length > 0 && gridTfs.length > 0;
+  /** Timeframes the ranking asked to load (only fetched once a grid ranking is started) */
+  const [rankLoad, setRankLoad] = useState<HtfInterval[]>([]);
+
+  const htfWants = useMemo<HtfWant[]>(() => {
+    const out = new Map<HtfInterval, number>();
+    const add = (interval: HtfInterval, warm: number) => out.set(interval, Math.max(out.get(interval) ?? 0, warm));
+    if (htfActive) add(htfCfg.interval, htfWarmupBars(htfCfg));
+    for (const tf of rankLoad) {
+      if (!gridTfs.includes(tf)) continue;
+      for (const id of gridFilters) add(tf, htfWarmupBars({ enabled: true, interval: tf, indicator: id, params: { [id]: paramsById[id] ?? {} } }));
+    }
+    return [...out].map(([interval, warmBars]) => ({ interval, warmBars }));
+  }, [htfActive, htfCfg, rankLoad, gridTfs, gridFilters, paramsById]);
+
   const csvSymbol = data.source?.kind === "csv" ? /^([A-Z0-9]{5,})_/.exec(data.source.file)?.[1] : undefined;
-  const htf = useHtfData({
-    active: htfActive,
+  const htf = useHtfSets({
     symbol: csvSymbol ?? symbol,
-    interval: htfCfg.interval,
-    warmBars: useMemo(() => htfWarmupBars(htfCfg), [htfCfg]),
+    wants: htfWants,
     firstTime: bars.length ? bars.time[0] : null,
     lastTime: bars.length ? bars.time[bars.length - 1] : null,
     ltfMinutes: dataTfMinutes,
   });
-  const htfReady = !htfActive || !!htf.klines;
-  const htfBars = useMemo(() => (htf.klines ? toBars(htf.klines) : null), [htf.klines]);
+  const htfKlines = htfActive ? htf.sets[htfCfg.interval] ?? null : null;
+  const htfError = htf.error ? `โหลดข้อมูล ${HTF_LABELS[htf.error.interval]} ไม่สำเร็จ: ${htf.error.message}` : null;
+  const htfReady = !htfActive || !!htfKlines;
+  const htfBars = useMemo(() => (htfKlines ? toBars(htfKlines) : null), [htfKlines]);
   const trend = useMemo(
     () => (htfActive && htfBars && bars.length
-      ? htfTrend(bars, htfBars, htfInd.def, htfInd.params, htfCfg.interval, dataTfMinutes)
+      ? htfTrend(bars, htfBars, htfInd.def, htfInd.params, htfCfg.interval, dataTfMinutes, {
+          overlays: true, warmup: htfIndicatorWarmup(htfInd.def, htfInd.params, htfCfg.interval),
+        })
       : null),
     [htfActive, htfBars, bars, htfInd, htfCfg.interval, dataTfMinutes],
   );
-  const htfLabel = `${htfInd.def.name} ${HTF_LABELS[htfCfg.interval]}`;
   // The filter's own lines (dashed) on the price + a strip showing the allowed side
   const htfOverlays = trend?.overlays;
   const htfPanes = useMemo<PanePlot[]>(() => (trend
@@ -179,15 +203,15 @@ export default function KlinesPage() {
 
   // Must run before the backtest effect below so jobs see the new higher-timeframe bars
   useEffect(() => {
-    getPool().setHtf(htf.klines ? htfCfg.interval : null, htf.klines);
-  }, [htf.klines, htfCfg.interval]);
+    getPool().setHtf(htf.sets);
+  }, [htf.sets]);
 
   useEffect(() => {
     if (bars.length === 0) { setRunning(false); return; }
     if (!htfReady) {
       // waiting for the higher-timeframe bars (or they failed to load)
-      setRunning(!htf.error);
-      setRunError(htf.error ? `โหลดข้อมูล ${htfLabel} ไม่สำเร็จ: ${htf.error}` : null);
+      setRunning(!htfError);
+      setRunError(htfError);
       return;
     }
     const ctrl = new AbortController();
@@ -204,49 +228,70 @@ export default function KlinesPage() {
         .finally(() => { if (!ctrl.signal.aborted) setRunning(false); });
     }, 180);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [bars, def, params, config, evalBars, htfReady, htf.klines, htf.error, htfLabel]);
+  }, [bars, def, params, config, evalBars, htfReady, htf.sets, htfError]);
 
   // A result only belongs to the bars it was computed on
   const result = single && single.bars === bars ? single.result : null;
 
   // ─── Ranking (many indicators in parallel, same evaluation window) ──
-  const [rank, setRank] = useState<{ rows: RankRow[]; bars: Bars; configKey: string } | null>(null);
+  const [rank, setRank] = useState<{ rows: RankRow[]; bars: Bars; configKey: string; grid: boolean } | null>(null);
   const [rankRunning, setRankRunning] = useState(false);
   const [rankProgress, setRankProgress] = useState<{ done: number; total: number } | null>(null);
   const [rankPending, setRankPending] = useState<{ since: Date | null } | null>(null);
   const rankCtrl = useRef<AbortController | null>(null);
-  const configKey = `${JSON.stringify(config)}|${evalBars ?? "all"}|${htfActive ? htf.klines?.length ?? "-" : "off"}`;
+  const rankDefs = useMemo(() => listIndicators().filter((d) => inScope(d, rankScope, favorites)), [rankScope, favorites]);
+  const rankRuns = rankDefs.length * (gridOn ? gridFilters.length * gridTfs.length + 1 : 1);
+  // The ranking itself never uses the single-run filter: it is either unfiltered or the grid
+  const rankConfig = useMemo<BacktestConfig>(() => ({ ...config, htf: { ...htfCfg, enabled: false } }), [config, htfCfg]);
+  const configKey = `${JSON.stringify(rankConfig)}|${evalBars ?? "all"}|${gridOn ? `${gridFilters.join(",")}@${gridTfs.join(",")}` : "nogrid"}`;
+  const gridLoaded = gridTfs.every((tf) => !!htf.sets[tf]);
 
   const runRanking = useCallback(async (afterReload = false) => {
-    const defs = listIndicators().filter((d) => inScope(d, rankScope, favorites));
+    const defs = rankDefs;
     if (!defs.length || bars.length < 50) return;
-    if (htf.error) { setError(`โหลดข้อมูล ${htfLabel} ไม่สำเร็จ: ${htf.error}`); return; }
     // Every indicator must be evaluated on the same window → load enough history for the longest warm-up first
     const maxWarm = Math.max(0, ...defs.map((d) => warmupOf(d, normalizeParams(d, paramsById[d.id]), tfMinutes)));
-    // …and the higher-timeframe bars must cover them (a refresh mid-run would cancel the jobs)
-    if (!afterReload && (htf.loading || !htfReady || (isLatest && bars.length < Math.min(MAX_BARS, limit + maxWarm)))) {
+    // …and the grid's higher-timeframe bars must be loaded (a refresh mid-run would cancel the jobs)
+    if (gridOn) setRankLoad(gridTfs);
+    if (!afterReload && ((gridOn && (!gridLoaded || htf.loading)) || (isLatest && bars.length < Math.min(MAX_BARS, limit + maxWarm)))) {
       setRankWarmup(maxWarm);
       setRankRunning(true);
       setRankPending({ since: data.loadedAt });
       return;
     }
+    if (gridOn && !gridLoaded) { setError(htfError ?? "โหลดข้อมูล timeframe ใหญ่ไม่ครบ"); setRankRunning(false); return; }
+
+    type Combo = { def: IndicatorDef; filter: RankRow["filter"] };
+    const combos: Combo[] = [];
+    for (const d of defs) {
+      combos.push({ def: d, filter: null });
+      if (gridOn) for (const id of gridFilters) for (const tf of gridTfs) combos.push({ def: d, filter: { indicator: id, interval: tf } });
+    }
     rankCtrl.current?.abort();
     const ctrl = new AbortController();
     rankCtrl.current = ctrl;
     setRankRunning(true);
-    setRankProgress({ done: 0, total: defs.length });
+    setRankProgress({ done: 0, total: combos.length });
     try {
       const outs = await getPool().runMany(
-        defs.map((d) => ({ indicatorId: d.id, params: paramsById[d.id], config, full: false as const, evalBars })),
+        combos.map(({ def: d, filter }) => ({
+          indicatorId: d.id,
+          params: paramsById[d.id],
+          config: filter
+            ? { ...rankConfig, htf: { enabled: true, interval: filter.interval, indicator: filter.indicator, params: { [filter.indicator]: paramsById[filter.indicator] ?? {} } } }
+            : rankConfig,
+          full: false as const,
+          evalBars,
+        })),
         (done, total) => setRankProgress({ done, total }),
         ctrl.signal,
       );
-      const rows: RankRow[] = defs.map((d, i) => {
+      const rows: RankRow[] = combos.map(({ def: d, filter }, i) => {
         const o = outs[i];
-        const base = { id: d.id, name: d.name, category: d.category, source: sourceOf(d) };
+        const base = { id: d.id, name: d.name, category: d.category, source: sourceOf(d), filter };
         return o instanceof Error ? { ...base, summary: null, error: o.message } : { ...base, summary: o as RankRow["summary"] };
       });
-      setRank({ rows, bars, configKey });
+      setRank({ rows, bars, configKey, grid: gridOn });
     } catch (err) {
       if (!(err instanceof AbortedError)) setError(String(err));
     } finally {
@@ -256,17 +301,21 @@ export default function KlinesPage() {
         rankCtrl.current = null;
       }
     }
-  }, [rankScope, favorites, bars, paramsById, config, configKey, setError, tfMinutes, isLatest, limit, evalBars, data.loadedAt, htfReady, htfLabel, htf.loading, htf.error]);
+  }, [rankDefs, bars, paramsById, rankConfig, configKey, setError, tfMinutes, isLatest, limit, evalBars, data.loadedAt,
+    gridOn, gridFilters, gridTfs, gridLoaded, htf.loading, htfError]);
 
-  // Run the ranking once the extra warm-up history has arrived (or the exchange had no more)
+  // Run the ranking once the extra history (chart warm-up and grid timeframes) has arrived
   useEffect(() => {
     if (!rankPending || data.loading || htf.loading) return;
-    if (!htfReady) { setRankPending(null); setRankRunning(false); return; }
+    if (gridOn && !gridLoaded) {
+      if (htfError) { setError(htfError); setRankPending(null); setRankRunning(false); }
+      return;
+    }
     const enough = !isLatest || bars.length >= Math.min(MAX_BARS, limit + rankWarmup);
     if (!enough && data.loadedAt === rankPending.since) return;
     setRankPending(null);
     void runRanking(true);
-  }, [rankPending, data.loading, data.loadedAt, bars.length, limit, rankWarmup, runRanking, htf.loading, htfReady, isLatest]);
+  }, [rankPending, data.loading, data.loadedAt, bars.length, limit, rankWarmup, runRanking, htf.loading, gridOn, gridLoaded, htfError, isLatest, setError]);
 
   const cancelRanking = useCallback(() => {
     rankCtrl.current?.abort();
@@ -281,11 +330,33 @@ export default function KlinesPage() {
     else setMobileTab("results");
   }, [isDesktop]);
 
-  const applyFromRanking = useCallback((id: string) => {
-    setStrategyId(id);
+  /** Use a ranking row on the chart: its strategy and its filter (or no filter) */
+  const applyFromRanking = useCallback((row: RankRow) => {
+    setStrategyId(row.id);
+    setConfig((c) => {
+      const h = normalizeHtf(c.htf);
+      const f = row.filter;
+      return {
+        ...c,
+        htf: f
+          ? { ...h, enabled: true, indicator: f.indicator, interval: f.interval, params: { ...h.params, [f.indicator]: paramsById[f.indicator] ?? {} } }
+          : { ...h, enabled: false },
+      };
+    });
     if (!isDesktop) setMobileTab("chart");
     else window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [isDesktop, setStrategyId]);
+  }, [isDesktop, setStrategyId, setConfig, paramsById]);
+
+  /** Apply only a filter (from the per-filter summary) to the current strategy */
+  const applyFilter = useCallback((f: NonNullable<RankRow["filter"]> | null) => {
+    applyFromRanking({ id: def.id, name: def.name, category: def.category, source: sourceOf(def), summary: null, filter: f });
+  }, [applyFromRanking, def]);
+
+  const goRanking = useCallback(() => {
+    setSideTab("ranking");
+    setMobileTab("ranking");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   const lastClose = bars.length ? bars.close[bars.length - 1] : null;
   const changePct = bars.length > 1 ? ((bars.close[bars.length - 1] - bars.close[0]) / bars.close[0]) * 100 : null;
@@ -423,13 +494,17 @@ export default function KlinesPage() {
               evalBars={evalBars}
               onShowResults={showResults}
               htf={{
+                enabled: htfCfg.enabled,
+                label: htfLabel,
                 applies: htfActive,
                 chartTf: interval,
-                loading: htf.loading,
-                error: htf.error,
+                loading: htfActive && htf.loading === htfCfg.interval,
+                error: htfActive ? htfError : null,
                 state: trend && bars.length ? trend.regime[bars.length - 1] : null,
                 since: trend && trend.sinceIdx >= 0 ? bars.time[trend.sinceIdx] : null,
               }}
+              onClearHtf={() => setConfig((c) => ({ ...c, htf: { ...normalizeHtf(c.htf), enabled: false } }))}
+              onFindHtf={goRanking}
             />
           </section>
           <section className={sideVis("ranking")}>
@@ -442,13 +517,23 @@ export default function KlinesPage() {
               onScope={setRankScope}
               favorites={favorites}
               mode={config.mode}
-              htfNote={htfActive ? `ตัวกรอง ${htfLabel}` : null}
               workers={ready ? getPool().size : 1}
               barCount={bars.length}
               currentId={def.id}
+              applied={htfCfg.enabled ? { indicator: htfCfg.indicator, interval: htfCfg.interval } : null}
+              grid={rank?.grid ?? false}
+              rankHtf={rankHtf}
+              onRankHtf={setRankHtf}
+              tfChoices={tfChoices}
+              chartTf={interval}
+              runs={rankRuns}
+              strategies={rankDefs.length}
+              htfLoading={rankRunning && rankPending ? htf.loading : null}
+              onPickFilters={() => setPicker("filters")}
               onRun={() => void runRanking()}
               onCancel={cancelRanking}
               onApply={applyFromRanking}
+              onApplyFilter={applyFilter}
             />
           </section>
         </aside>
@@ -495,6 +580,17 @@ export default function KlinesPage() {
         multi
         plottableOnly
         onPick={(id) => { if (id !== def.id) setOverlayIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])); }}
+        favorites={favorites}
+        onToggleFavorite={toggleFavorite}
+      />
+      <IndicatorPicker
+        open={picker === "filters"}
+        onClose={() => setPicker(null)}
+        title="Indicator ที่ใช้เป็นตัวกรองเทรนด์ใหญ่"
+        description="เลือกได้หลายตัว — แต่ละตัวจะรันบนทุก timeframe ที่เลือก · ใช้พารามิเตอร์ที่ตั้งไว้ในแท็บกลยุทธ์"
+        selected={rankHtf.filters}
+        multi
+        onPick={(id) => setRankHtf((prev) => ({ ...prev, filters: prev.filters.includes(id) ? prev.filters.filter((x) => x !== id) : [...prev.filters, id] }))}
         favorites={favorites}
         onToggleFavorite={toggleFavorite}
       />
